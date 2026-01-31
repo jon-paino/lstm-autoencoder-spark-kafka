@@ -25,6 +25,7 @@ RUN uv pip install --system -r pyproject.toml
 
 # Copy application code
 COPY main.py .
+COPY isolation_forest_detector.py .
 
 # Expose Dash port
 EXPOSE 8050
