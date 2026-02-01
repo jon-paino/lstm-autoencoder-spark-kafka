@@ -207,8 +207,6 @@ marimo/_lsp/
 __marimo__/
 
 #Data
-data/**
-!data/.gitkeep
 .kaggle/
 kaggle.json
 
