@@ -48,7 +48,7 @@ curl -o data/nyc_taxi.csv https://raw.githubusercontent.com/numenta/NAB/master/d
 uv sync
 
 # Run training script
-uv run python app/train.py
+python app/train.py
 ```
 
 This creates the following files in `models/`:
@@ -61,7 +61,7 @@ This creates the following files in `models/`:
 
 **For LSTM detection mode:**
 ```bash
-DETECTOR_TYPE=lstm START_OFFSET=4992 LOOP_DATA=false docker compose up --build
+MESSAGE_DELAY_SECONDS=0.01 DETECTOR_TYPE=lstm START_OFFSET=4992 LOOP_DATA=false docker compose up --build
 ```
 
 **For Isolation Forest detection mode:**
@@ -73,75 +73,6 @@ DETECTOR_TYPE=isolation_forest docker compose up --build
 
 Open your browser to: **http://localhost:8050**
 
-## Local Development Setup
-
-### Install uv
-
-```bash
-# macOS/Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Or with Homebrew
-brew install uv
-```
-
-### Install Dependencies
-
-```bash
-# From project root
-uv sync
-
-# Or install with dev dependencies
-uv sync --all-extras
-```
-
-### Train the Model Locally
-
-```bash
-uv run python app/train.py
-```
-
-Training output:
-```
-Training LSTM Encoder-Decoder...
-Epoch 1/50, Train Loss: 0.XXXX, Val Loss: 0.XXXX
-...
-Training complete!
-Model saved to models/lstm_model.pt
-```
-
-### Evaluate the Model
-
-```bash
-uv run python app/evaluate.py
-```
-
-This runs the trained model against test data and outputs per-week anomaly scores.
-
-## Docker Commands
-
-### Build Services
-
-```bash
-# Build all services
-docker compose build
-
-# Build specific service
-docker compose build app
-```
-
-### Run Services
-
-```bash
-# Start all services (foreground)
-docker compose up
-
-# Start in background
-docker compose up -d
-
-# Start with rebuild
-docker compose up --build
-```
 
 ### View Logs
 
@@ -153,16 +84,6 @@ docker compose logs -f
 docker compose logs -f app
 docker compose logs -f producer
 docker compose logs -f kafka
-```
-
-### Stop Services
-
-```bash
-# Stop and remove containers
-docker compose down
-
-# Stop and remove containers + volumes
-docker compose down -v
 ```
 
 ## Configuration
@@ -178,14 +99,6 @@ docker compose down -v
 | `WAIT_FOR_APP` | `true` | Producer waits for Spark to be ready |
 | `WINDOW_SIZE` | `200` | Sliding window size (Isolation Forest) |
 | `CONTAMINATION` | `0.05` | Expected anomaly ratio (Isolation Forest) |
-
-### LSTM Mode Configuration
-
-For LSTM detection, use `START_OFFSET=4992` to skip training/validation data and only process test data (matching the evaluation script):
-
-```bash
-DETECTOR_TYPE=lstm START_OFFSET=4992 LOOP_DATA=false docker compose up --build
-```
 
 ## Project Structure
 
@@ -247,30 +160,3 @@ Based on [Malhotra et al. (2016)](https://arxiv.org/abs/1607.00148):
 | Kafka (internal) | 29092 | Inter-container |
 | Zookeeper | 2181 | Kafka coordination |
 
-## Troubleshooting
-
-### Kafka topic not found errors
-
-These are normal during startup. The topic is auto-created when the producer sends its first message.
-
-### Model artifacts not found
-
-Ensure you've run the training script before using LSTM mode:
-```bash
-uv run python app/train.py
-```
-
-### Dashboard not updating
-
-Check that all services are healthy:
-```bash
-docker compose ps
-```
-
-### Memory issues
-
-Adjust Spark worker memory in `docker-compose.yml`:
-```yaml
-environment:
-  - SPARK_WORKER_MEMORY=4G
-```
