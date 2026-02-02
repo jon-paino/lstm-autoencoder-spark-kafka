@@ -25,7 +25,7 @@ try:
 except ImportError:
     HAS_MATPLOTLIB = False
 
-from data_preprocessor import NYCTaxiPreprocessor, TimeSeriesDataset
+from data_preprocessor import NYCTaxiPreprocessor, PreprocessorConfig, TimeSeriesDataset
 from lstm_autoencoder import EncDecAD
 from anomaly_scorer import AnomalyScorer
 from train import load_model
@@ -483,9 +483,20 @@ def main():
     with open(model_dir / "training_history.pkl", "rb") as f:
         history = pickle.load(f)
 
-    # Load and preprocess data
+    # Load preprocessor config (data split configuration used during training)
+    config_path = model_dir / "preprocessor_config.pkl"
+    if config_path.exists():
+        with open(config_path, "rb") as f:
+            preprocess_config = pickle.load(f)
+        print(f"Loaded data split config: train={preprocess_config.train_weeks}, "
+              f"val={preprocess_config.val_weeks}, threshold={preprocess_config.threshold_weeks}")
+    else:
+        logger.warning(f"No preprocessor_config.pkl found in {model_dir}, using defaults")
+        preprocess_config = PreprocessorConfig()
+
+    # Load and preprocess data using the SAME config as training
     print("\nLoading data...")
-    preprocessor = NYCTaxiPreprocessor()
+    preprocessor = NYCTaxiPreprocessor(config=preprocess_config)
     dataloaders, normalized_splits = preprocessor.preprocess(args.data_path, batch_size=1)
 
     # Compute train scores (for distribution plot)

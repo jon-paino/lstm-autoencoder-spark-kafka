@@ -248,6 +248,12 @@ def save_training_artifacts(
         pickle.dump(history, f)
     logger.info(f"Saved training history to {history_path}")
 
+    # Save preprocessor config (data split configuration)
+    config_path = output_dir / "preprocessor_config.pkl"
+    with open(config_path, "wb") as f:
+        pickle.dump(preprocessor.config, f)
+    logger.info(f"Saved preprocessor config to {config_path}")
+
 
 def load_model(model_path: str, device: torch.device) -> EncDecAD:
     """
@@ -294,7 +300,7 @@ def main():
     parser.add_argument(
         "--hidden-dim",
         type=int,
-        default=32,
+        default=64,
         help="LSTM hidden dimension"
     )
     parser.add_argument(
@@ -511,6 +517,7 @@ def main():
     print("  - scaler.pkl")
     print("  - scorer.pkl")
     print("  - training_history.pkl")
+    print("  - preprocessor_config.pkl")
 
 
 if __name__ == "__main__":
