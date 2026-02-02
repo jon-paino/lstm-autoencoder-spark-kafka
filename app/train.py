@@ -342,7 +342,7 @@ def main():
     parser.add_argument(
         "--threshold-percentile",
         type=float,
-        default=95.0,
+        default=99.99,
         help="Percentile for anomaly threshold"
     )
     parser.add_argument(

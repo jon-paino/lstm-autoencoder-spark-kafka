@@ -27,13 +27,13 @@ logger = logging.getLogger(__name__)
 SAMPLES_PER_DAY = 48  # 30-minute intervals
 SAMPLES_PER_WEEK = SAMPLES_PER_DAY * 7  # 336 samples per week
 
-# Known anomaly windows in NYC taxi dataset
+# Known anomaly windows in NYC taxi dataset (precise timestamps from dataset labels)
 ANOMALY_WINDOWS = [
-    ("2014-10-30", "2014-11-03"),  # NYC Marathon
-    ("2014-11-25", "2014-11-29"),  # Thanksgiving
-    ("2014-12-23", "2014-12-27"),  # Christmas
-    ("2014-12-29", "2015-01-03"),  # New Year's
-    ("2015-01-24", "2015-01-29"),  # Blizzard
+    ("2014-10-30 15:30:00", "2014-11-02 22:30:00"),  # NYC Marathon
+    ("2014-11-25 12:00:00", "2014-11-29 19:00:00"),  # Thanksgiving
+    ("2014-12-23 11:30:00", "2014-12-27 18:30:00"),  # Christmas
+    ("2014-12-29 21:30:00", "2015-01-03 04:30:00"),  # New Year's
+    ("2015-01-24 20:30:00", "2015-01-29 03:30:00"),  # Blizzard
 ]
 
 
@@ -124,8 +124,8 @@ class NYCTaxiPreprocessor:
         """Check if a timestamp falls within any known anomaly window."""
         for start, end in ANOMALY_WINDOWS:
             start_dt = pd.Timestamp(start)
-            end_dt = pd.Timestamp(end) + pd.Timedelta(days=1)  # Include end day
-            if start_dt <= timestamp < end_dt:
+            end_dt = pd.Timestamp(end)
+            if start_dt <= timestamp <= end_dt:
                 return True
         return False
 

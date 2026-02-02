@@ -25,11 +25,12 @@ Real-time anomaly detection on NYC taxi demand data using Kafka streaming, Spark
 
 ## Quick Start (Docker)
 
-### 1. Clone the Repository
+### 1. Clone the Repository and Install dependencies locally
 
 ```bash
 git clone https://github.com/your-username/lstm-autoencoder-spark-kafka.git
 cd lstm-autoencoder-spark-kafka
+uv sync
 ```
 
 ### 2. Download the Dataset
@@ -41,23 +42,7 @@ The NYC taxi dataset should be placed in `data/nyc_taxi.csv`. If not present, do
 curl -o data/nyc_taxi.csv https://raw.githubusercontent.com/numenta/NAB/master/data/realKnownCause/nyc_taxi.csv
 ```
 
-### 3. Train the LSTM Model (Required for LSTM mode)
-
-```bash
-# Install dependencies locally
-uv sync
-
-# Run training script
-python app/train.py
-```
-
-This creates the following files in `models/`:
-- `lstm_model.pt` - Trained LSTM Encoder-Decoder model
-- `scaler.pkl` - StandardScaler for data normalization
-- `scorer.pkl` - Anomaly scorer with calibrated threshold
-- `training_history.pkl` - Training loss history
-
-### 4. Build and Run with Docker Compose
+### 3. Build and Run with Docker Compose
 
 **For LSTM detection mode:**
 ```bash
@@ -69,7 +54,7 @@ MESSAGE_DELAY_SECONDS=0.01 DETECTOR_TYPE=lstm START_OFFSET=4992 LOOP_DATA=false 
 DETECTOR_TYPE=isolation_forest docker compose up --build
 ```
 
-### 5. View the Dashboard
+### 4. View the Dashboard
 
 Open your browser to: **http://localhost:8050**
 
@@ -142,6 +127,67 @@ Based on [Malhotra et al. (2016)](https://arxiv.org/abs/1607.00148):
 - **Scoring**: Mahalanobis distance with full covariance matrix
 - **Windows**: Non-overlapping weekly windows (336 samples = 48/day × 7 days)
 - **Threshold**: 95th percentile of validation reconstruction errors
+
+#### Model Training Workflow
+
+The pre-trained model in `models/` was created through the following optimization process:
+
+**1. Data Split Optimization**
+
+The NYC taxi dataset (29 complete weeks) was split into train/validation/threshold/test sets. We optimized the split configuration to maximize F1 score:
+
+```bash
+python app/optimize_split.py --output optimization_results/split_optimization.json
+```
+
+Best configuration: **8 train / 2 val / 4 threshold weeks** (15 weeks for testing)
+
+**2. Hyperparameter Optimization**
+
+Grid search over LSTM architecture parameters (hidden_dim, num_layers, dropout, learning_rate, threshold_percentile):
+
+```bash
+python app/optimize_hyperparams.py --mode grid --output optimization_results/hyperparam_grid.json
+```
+
+Best configuration: **hidden_dim=64, num_layers=1, dropout=0.2, lr=0.0005, threshold=99.99%**
+
+**3. Model Training**
+
+Train the final model with optimized parameters:
+
+```bash
+python app/train.py
+```
+
+**4. Evaluation**
+
+Generate performance metrics and visualizations:
+
+```bash
+python app/evaluate.py 
+```
+
+#### Model Artifacts
+
+The `models/` directory contains:
+| File | Description |
+|------|-------------|
+| `lstm_model.pt` | Trained LSTM Encoder-Decoder weights |
+| `scaler.pkl` | StandardScaler fitted on training data |
+| `scorer.pkl` | Anomaly scorer with calibrated threshold |
+| `training_history.pkl` | Training/validation loss curves |
+| `preprocessor_config.pkl` | Data split configuration |
+
+#### Evaluation Results
+
+The `evaluation/` directory contains performance visualizations:
+
+- `training_history.png` - Training and validation loss curves
+- `score_distribution.png` - Anomaly score distributions (train vs test)
+- `weekly_comparison.png` - Normal vs anomaly week reconstruction comparison
+- `reconstruction_*.png` - Detailed reconstruction plots for each anomaly week
+
 
 ### Isolation Forest
 

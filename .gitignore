@@ -214,8 +214,5 @@ kaggle.json
 .DS_Store
 **/.DS_Store
 
-models/
-
 optimization_results/**
 project_structure.md
-evaluation/**
