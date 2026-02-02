@@ -41,9 +41,9 @@ ANOMALY_WINDOWS = [
 class PreprocessorConfig:
     """Configuration for data preprocessing."""
     sequence_length: int = SAMPLES_PER_WEEK  # 336 (one week)
-    train_weeks: int = 10  # Weeks 1-10 for training
-    val_weeks: int = 2     # Weeks 11-12 for early stopping
-    threshold_weeks: int = 2  # Weeks 13-14 for threshold calibration
+    train_weeks: int = 9   # Weeks for training
+    val_weeks: int = 3     # Weeks for early stopping AND error distribution fitting
+    threshold_weeks: int = 2  # Weeks for threshold calibration
     # Remaining weeks for testing
 
 
@@ -208,9 +208,9 @@ class NYCTaxiPreprocessor:
 
         Split strategy (based on Malhotra et al.):
         - sN (train): First N normal weeks for training
-        - vN1 (val): Next M normal weeks for early stopping
-        - vN2 (threshold): Additional normal weeks for threshold calibration
-        - Test: Remaining weeks (includes anomalies)
+        - vN1 (val): Next M normal weeks for early stopping + error distribution
+        - vN2 (threshold_val): Additional normal weeks for threshold calibration
+        - Test: Remaining weeks (normal + anomalies)
 
         Args:
             weekly_data: Array of shape (num_weeks, 336)
@@ -228,7 +228,7 @@ class NYCTaxiPreprocessor:
         if weekly_data is None or week_info is None:
             raise ValueError("No segmented data. Call segment_into_weeks() first.")
 
-        # Identify normal weeks (for training and validation)
+        # Identify normal weeks
         normal_indices = [i for i, w in enumerate(week_info) if not w["is_anomaly"]]
 
         # Training set: first N normal weeks
@@ -239,13 +239,13 @@ class NYCTaxiPreprocessor:
         val_end = train_end + self.config.val_weeks
         val_indices = normal_indices[train_end:val_end]
 
-        # Threshold calibration set: additional normal weeks
+        # Threshold calibration set (vN2): additional normal weeks
         threshold_end = val_end + self.config.threshold_weeks
         threshold_indices = normal_indices[val_end:threshold_end]
 
-        # Test set: all remaining weeks (includes anomalies)
-        all_train_val = set(train_indices + val_indices + threshold_indices)
-        test_indices = [i for i in range(len(weekly_data)) if i not in all_train_val]
+        # Test set: remaining normal weeks + all anomaly weeks
+        all_used = set(train_indices + val_indices + threshold_indices)
+        test_indices = [i for i in range(len(weekly_data)) if i not in all_used]
 
         splits = {
             "train": weekly_data[train_indices] if train_indices else np.array([]),
@@ -268,13 +268,13 @@ class NYCTaxiPreprocessor:
         logger.info(f"  Val (threshold): {len(threshold_indices)} weeks")
         logger.info(f"  Test: {len(test_indices)} weeks")
 
-        # Log which test weeks contain anomalies
+        # Log which weeks contain anomalies in test set
         test_anomaly_weeks = [
             week_info[i]["year_week"]
             for i in test_indices
             if week_info[i]["is_anomaly"]
         ]
-        logger.info(f"  Test weeks with anomalies: {test_anomaly_weeks}")
+        logger.info(f"    Test anomaly weeks: {test_anomaly_weeks}")
 
         return splits
 
