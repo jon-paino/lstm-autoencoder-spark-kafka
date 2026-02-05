@@ -339,12 +339,20 @@ def run_anomaly_detection():
 
                         if not anomalies.empty:
                             score = anomalies["anomaly_score"].iloc[0]
+                            # Extract localization metadata from the anomaly results
+                            localization = {
+                                "anomaly_start": anomalies["localization_start"].iloc[0] if "localization_start" in anomalies.columns else None,
+                                "anomaly_end": anomalies["localization_end"].iloc[0] if "localization_end" in anomalies.columns else None,
+                                "scale_hours": anomalies["scale_hours"].iloc[0] if "scale_hours" in anomalies.columns else None,
+                                "contrast_ratio": anomalies["contrast_ratio"].iloc[0] if "contrast_ratio" in anomalies.columns else None,
+                            }
                             window_info = {
                                 "week_num": week_num,
                                 "start_time": str(window_start_ts),
                                 "end_time": str(window_end_ts),
                                 "score": score,
                                 "high_error_points": anomalies.to_dict("records"),
+                                "localization": localization,
                             }
                             data_store["flagged_windows"].append(window_info)
 
@@ -623,6 +631,50 @@ def update_dashboard(n):
             line=dict(color=SECONDARY_COLOR, width=2),
             hovertemplate="<b>Time:</b> %{x}<br><b>Demand:</b> %{y}<extra></extra>"
         ))
+
+        # Add markers for flagged anomaly weeks and localized 6hr windows
+        if DETECTOR_TYPE == "lstm" and flagged_windows:
+            visible_start = df["timestamp"].iloc[0]
+            visible_end = df["timestamp"].iloc[-1]
+            for window in flagged_windows:
+                week_start = window.get("start_time")
+                week_end = window.get("end_time")
+
+                # Add red vertical lines for the flagged week boundaries
+                if week_start and week_start >= visible_start and week_start <= visible_end:
+                    fig.add_vline(
+                        x=week_start,
+                        line=dict(color=ANOMALY_COLOR, width=2, dash="dash"),
+                        layer="above"
+                    )
+                if week_end and week_end >= visible_start and week_end <= visible_end:
+                    fig.add_vline(
+                        x=week_end,
+                        line=dict(color=ANOMALY_COLOR, width=2, dash="dash"),
+                        layer="above"
+                    )
+
+                # Add shaded 6hr localized region
+                loc = window.get("localization", {})
+                if loc.get("anomaly_start") and loc.get("anomaly_end"):
+                    loc_start = loc["anomaly_start"]
+                    loc_end = loc["anomaly_end"]
+                    # Only show if within visible range
+                    if loc_end >= visible_start and loc_start <= visible_end:
+                        scale_hours = loc.get("scale_hours", "?")
+                        contrast = loc.get("contrast_ratio", 0)
+                        fig.add_vrect(
+                            x0=loc_start,
+                            x1=loc_end,
+                            fillcolor=ANOMALY_COLOR,
+                            opacity=0.15,
+                            layer="below",
+                            line_width=1,
+                            line_color=ANOMALY_COLOR,
+                            annotation_text=f"{scale_hours}h",
+                            annotation_position="top left",
+                            annotation=dict(font_size=10, font_color=ANOMALY_COLOR)
+                        )
 
         # Overlay anomalies as red markers (only those within the visible window)
         if not anomalies_df.empty:

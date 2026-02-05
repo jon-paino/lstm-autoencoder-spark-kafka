@@ -591,8 +591,9 @@ def main():
     print("Step 5: Evaluating on test set")
     print("-" * 40)
 
-    # Get test week info
+    # Get test week info and timestamps
     test_week_info = preprocessor.get_test_week_info()
+    test_timestamps = preprocessor.get_test_timestamps()
 
     if args.scoring_mode == "point":
         # Point-level scoring
@@ -613,19 +614,23 @@ def main():
 
         # Use window_scores for display
         test_scores = window_scores
+        # Store point_scores for localization
+        all_point_scores = point_scores
     else:
         # Legacy window-level scoring
-        test_scores, _ = scorer.compute_scores(
+        test_scores, test_errors = scorer.compute_scores(
             model, dataloaders["test"], device
         )
         predictions = scorer.predict(test_scores)
+        # Use raw reconstruction errors for localization (not squared normalized)
+        all_point_scores = test_errors
 
-    print("\nTest Results (Window-Level):")
-    print(f"{'Week':<10} {'Score':>12} {'Predicted':>10} {'Actual':>12} {'Match':>6}")
-    print("-" * 52)
+    print("\nTest Results (Window-Level with Localization):")
+    print(f"{'Week':<10} {'Score':>12} {'Predicted':>10} {'Actual':>12} {'Match':>6}  {'Localization':<35}")
+    print("-" * 90)
 
     correct = 0
-    for score, pred, week in zip(test_scores, predictions, test_week_info):
+    for i, (score, pred, week) in enumerate(zip(test_scores, predictions, test_week_info)):
         pred_str = "ANOMALY" if pred else "normal"
         actual_str = "ANOMALY" if week["is_anomaly"] else "normal"
         match = pred == week["is_anomaly"]
@@ -633,11 +638,41 @@ def main():
         if match:
             correct += 1
 
-        print(f"{week['year_week']:<10} {score:>12.2f} {pred_str:>10} {actual_str:>12} {match_str:>6}")
+        # Compute localization for anomalous weeks
+        loc_str = ""
+        if pred:
+            timestamps = test_timestamps[i]
+            localization = scorer.localize_anomaly(all_point_scores[i], timestamps)
+            # Format: "Nov 27 02:30-08:30 (6h, ρ=9.9)"
+            start_ts = localization["anomaly_start"]
+            end_ts = localization["anomaly_end"]
+            scale_h = localization["scale_hours"]
+            rho = localization["contrast_ratio"]
+            # Extract just date and time for display
+            start_short = start_ts[5:16].replace("T", " ") if "T" in start_ts else start_ts[5:16]
+            end_short = end_ts[11:16] if "T" in end_ts else end_ts[11:16]
+            loc_str = f"{start_short}-{end_short} ({scale_h}h, ρ={rho:.1f})"
+
+        print(f"{week['year_week']:<10} {score:>12.2f} {pred_str:>10} {actual_str:>12} {match_str:>6}  {loc_str:<35}")
 
     accuracy = correct / len(predictions)
     print("-" * 52)
     print(f"Accuracy: {correct}/{len(predictions)} ({accuracy:.1%})")
+
+    # Print raw error statistics for anomalous weeks (for threshold calibration)
+    print("\n" + "=" * 70)
+    print("Raw Reconstruction Error Statistics for ANOMALOUS weeks:")
+    print("=" * 70)
+    for i, week in enumerate(test_week_info):
+        if week["is_anomaly"]:
+            errors = all_point_scores[i]
+            peak_idx = np.argmax(errors)
+            print(f"{week['year_week']}: min={errors.min():.4f}, max={errors.max():.4f}, "
+                  f"mean={errors.mean():.4f}, std={errors.std():.4f}")
+            print(f"  Points >0.2: {np.sum(errors > 0.2):3d}, >0.5: {np.sum(errors > 0.5):3d}, "
+                  f">1.0: {np.sum(errors > 1.0):3d}, >2.0: {np.sum(errors > 2.0):3d}")
+            print(f"  Peak at index {peak_idx} (hour {peak_idx/2:.1f}), value={errors[peak_idx]:.4f}")
+            print()
 
     # Calculate precision/recall for anomaly class
     true_positives = sum(1 for p, w in zip(predictions, test_week_info)

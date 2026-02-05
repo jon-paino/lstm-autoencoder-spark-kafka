@@ -433,6 +433,30 @@ class NYCTaxiPreprocessor:
 
         return [self.week_info[i] for i in self.split_indices.get("test", [])]
 
+    def get_test_timestamps(self) -> List[List[str]]:
+        """
+        Get timestamps for each test week (useful for localization).
+
+        Returns:
+            List of timestamp lists, one per test week.
+            Each inner list has 336 ISO-format timestamp strings.
+        """
+        if self.week_info is None or not hasattr(self, "split_indices"):
+            return []
+
+        test_timestamps = []
+        for i in self.split_indices.get("test", []):
+            week = self.week_info[i]
+            start_date = week["start_date"]
+            # Generate 336 timestamps at 30-minute intervals
+            timestamps = [
+                (start_date + pd.Timedelta(minutes=30 * j)).isoformat()
+                for j in range(self.config.sequence_length)
+            ]
+            test_timestamps.append(timestamps)
+
+        return test_timestamps
+
     def inverse_transform(self, data: np.ndarray) -> np.ndarray:
         """
         Inverse transform normalized data back to original scale.

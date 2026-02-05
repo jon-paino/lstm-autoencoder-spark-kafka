@@ -15,7 +15,7 @@ import logging
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, List, Any
 
 import numpy as np
 import torch
@@ -581,6 +581,149 @@ class AnomalyScorer:
         )
 
         return window_predictions
+
+    def localize_anomaly(
+        self,
+        point_scores: np.ndarray,
+        timestamps: List[str],
+        scales_hours: List[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Localize anomaly within a flagged window using sliding window analysis.
+
+        After a window is flagged as anomalous by the Mahalanobis score, this method
+        identifies the sub-window where anomalous behavior is most concentrated.
+
+        Algorithm:
+        1. For each scale h (in hours), compute sliding window sums of point scores
+        2. Find the position t* with maximum aggregate score
+        3. Compute contrast ratio: rho = max(S) / mean(S)
+        4. Select the scale with highest contrast ratio (most concentrated anomaly)
+
+        Args:
+            point_scores: Array of shape (seq_len,) with per-point anomaly scores
+            timestamps: List of timestamps corresponding to each point
+            scales_hours: Window sizes in hours to analyze (default: [1, 2, 3, 6, 12, 24, 48])
+                         Each hour = 2 samples at 30-minute intervals
+
+        Returns:
+            Dict with localization results:
+                - anomaly_start: Start timestamp of localized sub-window
+                - anomaly_end: End timestamp of localized sub-window
+                - anomaly_start_idx: Start index in the window
+                - anomaly_end_idx: End index in the window
+                - scale_hours: Best localization scale (hours)
+                - scale_samples: Best localization scale (samples)
+                - contrast_ratio: How concentrated the anomaly is (higher = sharper)
+                - peak_score: Maximum aggregate score at best scale
+                - all_scales: Results for all analyzed scales
+        """
+        if scales_hours is None:
+            scales_hours = [1, 2, 3, 6, 12, 24, 48]
+
+        seq_len = len(point_scores)
+        if seq_len != len(timestamps):
+            raise ValueError(f"point_scores length ({seq_len}) != timestamps length ({len(timestamps)})")
+
+        # Compute prefix sum for O(1) sliding window sums
+        # C[i] = sum(point_scores[0:i]), C[0] = 0
+        prefix_sum = np.zeros(seq_len + 1)
+        prefix_sum[1:] = np.cumsum(point_scores)
+
+        all_scales_results = {}
+
+        for h in scales_hours:
+            w = h * 2  # Convert hours to samples (30-min intervals)
+
+            if w > seq_len:
+                logger.debug(f"Scale {h}h ({w} samples) exceeds sequence length ({seq_len}), skipping")
+                continue
+
+            # Compute sliding sums: S[t] = C[t+w] - C[t] for t in [0, seq_len-w]
+            num_positions = seq_len - w + 1
+            sliding_sums = prefix_sum[w:seq_len + 1] - prefix_sum[:num_positions]
+
+            # Find peak position
+            t_star = int(np.argmax(sliding_sums))
+            peak_score = float(sliding_sums[t_star])
+
+            # Compute contrast ratio: how much the peak stands out from the mean
+            mean_sum = float(np.mean(sliding_sums))
+            rho = peak_score / mean_sum if mean_sum > 0 else 0.0
+
+            all_scales_results[h] = {
+                "t_star": t_star,
+                "t_end": t_star + w - 1,
+                "peak_score": peak_score,
+                "mean_score": mean_sum,
+                "contrast_ratio": rho,
+                "window_samples": w,
+            }
+
+        # Scale selection using absolute error thresholds:
+        # Fixed 6h window, select the one with:
+        # 1. Most 30-min intervals above absolute error threshold (0.2), OR
+        # 2. Contains a spike >= 8x the window's average error
+        best_scale_h = 6  # Fixed 6h window
+        best_w = 12  # 6h = 12 samples at 30-min intervals
+
+        if best_scale_h not in all_scales_results:
+            # Fallback if 6h not computed
+            best_scale_h = min(all_scales_results.keys()) if all_scales_results else 6
+            best_w = best_scale_h * 2
+
+        error_threshold = 0.2
+        spike_multiplier = 8.0
+
+        num_positions = seq_len - best_w + 1
+        best_t_star = 0
+        best_count = -1
+        best_has_spike = False
+
+        for t in range(num_positions):
+            window_scores = point_scores[t:t + best_w]
+            window_mean = np.mean(window_scores)
+
+            # Count points above absolute threshold
+            count_above = np.sum(window_scores > error_threshold)
+
+            # Check for extreme spike (8x window average)
+            has_spike = np.any(window_scores >= spike_multiplier * window_mean) if window_mean > 0 else False
+
+            # Prefer windows with spikes, then by count
+            if has_spike and not best_has_spike:
+                best_t_star = t
+                best_count = count_above
+                best_has_spike = True
+            elif has_spike == best_has_spike and count_above > best_count:
+                best_t_star = t
+                best_count = count_above
+                best_has_spike = has_spike
+
+        best_rho = all_scales_results.get(best_scale_h, {}).get("contrast_ratio", 0.0)
+
+        # Get timestamps for the localized region
+        anomaly_start_idx = best_t_star
+        anomaly_end_idx = min(best_t_star + best_w - 1, seq_len - 1)
+
+        result = {
+            "anomaly_start": timestamps[anomaly_start_idx],
+            "anomaly_end": timestamps[anomaly_end_idx],
+            "anomaly_start_idx": anomaly_start_idx,
+            "anomaly_end_idx": anomaly_end_idx,
+            "scale_hours": best_scale_h,
+            "scale_samples": best_w,
+            "contrast_ratio": best_rho,
+            "peak_score": all_scales_results.get(best_scale_h, {}).get("peak_score", 0.0),
+            "all_scales": all_scales_results,
+        }
+
+        logger.debug(
+            f"Localized anomaly to [{anomaly_start_idx}:{anomaly_end_idx}] "
+            f"({best_scale_h}h window, contrast={best_rho:.2f})"
+        )
+
+        return result
 
     def score_and_predict(
         self,

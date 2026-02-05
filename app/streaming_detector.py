@@ -153,7 +153,7 @@ class LSTMStreamingDetector(BaseDetector):
     def _compute_sequence_score_and_errors(
         self,
         sequence: np.ndarray
-    ) -> tuple[bool, float, np.ndarray, np.ndarray]:
+    ) -> tuple[bool, float, np.ndarray, np.ndarray, np.ndarray]:
         """
         Compute anomaly score and point-wise errors for a sequence.
 
@@ -163,10 +163,11 @@ class LSTMStreamingDetector(BaseDetector):
             sequence: Normalized sequence of shape (seq_len,)
 
         Returns:
-            Tuple of (is_anomaly, window_score, point_scores, point_predictions)
+            Tuple of (is_anomaly, window_score, point_scores, point_predictions, raw_errors)
+            - raw_errors: Absolute reconstruction errors for localization
         """
         if self.model is None or self.scorer is None:
-            return False, 0.0, np.zeros_like(sequence), np.zeros_like(sequence, dtype=bool)
+            return False, 0.0, np.zeros_like(sequence), np.zeros_like(sequence, dtype=bool), np.zeros_like(sequence)
 
         # Reshape for model: (1, seq_len, 1)
         x = torch.FloatTensor(sequence).unsqueeze(0).unsqueeze(-1).to(self.device)
@@ -199,7 +200,7 @@ class LSTMStreamingDetector(BaseDetector):
             # Window score: max point score for reporting
             window_score = np.max(point_scores)
 
-            return is_anomaly, window_score, point_scores, point_predictions
+            return is_anomaly, window_score, point_scores, point_predictions, error
         else:
             # Legacy window-level scoring
             mahalanobis_score = self.scorer._mahalanobis_distance(error)
@@ -210,7 +211,7 @@ class LSTMStreamingDetector(BaseDetector):
                 np.diag(self.scorer.cov) + 1e-8
             )
 
-            return is_anomaly, mahalanobis_score, point_scores, np.zeros_like(error, dtype=bool)
+            return is_anomaly, mahalanobis_score, point_scores, np.zeros_like(error, dtype=bool), error
 
     def detect(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -248,7 +249,7 @@ class LSTMStreamingDetector(BaseDetector):
 
         # Analyze the most recent complete window
         window_data = values_normalized[-self.window_size:]
-        is_anomaly, window_score, point_scores, point_predictions = self._compute_sequence_score_and_errors(
+        is_anomaly, window_score, point_scores, point_predictions, raw_errors = self._compute_sequence_score_and_errors(
             window_data
         )
 
@@ -282,31 +283,52 @@ class LSTMStreamingDetector(BaseDetector):
             window_df = df.tail(self.window_size).copy().reset_index(drop=True)
             window_df["point_score"] = point_scores
 
-            if use_point_level:
-                # Return points that exceeded the point threshold
-                anomalous_mask = point_predictions
-                anomalous_points = window_df[anomalous_mask].copy()
-                anomalous_points["anomaly_score"] = window_score
+            # Localize anomaly within the flagged window
+            # Use raw reconstruction errors (not squared normalized point_scores) for localization
+            # to match train.py behavior and work with calibrated thresholds
+            timestamps_list = window_df["timestamp"].astype(str).tolist()
+            localization = self.scorer.localize_anomaly(raw_errors, timestamps_list)
 
+            # Get the 6hr localized window boundaries
+            loc_start_idx = localization["anomaly_start_idx"]
+            loc_end_idx = localization["anomaly_end_idx"]
+
+            # Filter to only points within the 6hr localized window
+            localized_df = window_df.iloc[loc_start_idx:loc_end_idx + 1].copy()
+
+            # Select only the top 3 highest point_score points for display
+            top_n = min(3, len(localized_df))
+            anomalous_points = localized_df.nlargest(top_n, "point_score").copy()
+            anomalous_points["anomaly_score"] = window_score
+
+            if use_point_level:
                 logger.info(
                     f"LSTM detected anomaly (point-level)! "
                     f"{point_predictions.sum()} points exceed τ={self.scorer.point_threshold:.2f}, "
-                    f"returning {len(anomalous_points)} anomalous points"
+                    f"returning top {len(anomalous_points)} from 6hr window"
                 )
             else:
-                # Legacy: use top 5% of point scores
-                point_threshold = np.percentile(point_scores, 95)
-                anomalous_mask = point_scores >= point_threshold
-                anomalous_points = window_df[anomalous_mask].copy()
-                anomalous_points["anomaly_score"] = window_score
-
                 logger.info(
                     f"LSTM detected anomaly (window-level)! "
                     f"Score: {window_score:.2f} (threshold: {self.scorer.threshold:.2f}), "
-                    f"returning {len(anomalous_points)} high-error points"
+                    f"returning top {len(anomalous_points)} from 6hr window"
                 )
 
-            return anomalous_points[["timestamp", "value", "anomaly_score"]]
+            # Add localization metadata to anomalous points
+            anomalous_points["localization_start"] = localization["anomaly_start"]
+            anomalous_points["localization_end"] = localization["anomaly_end"]
+            anomalous_points["scale_hours"] = localization["scale_hours"]
+            anomalous_points["contrast_ratio"] = localization["contrast_ratio"]
+
+            logger.info(
+                f"  Localized anomaly to {localization['scale_hours']}h window: "
+                f"{localization['anomaly_start']} - {localization['anomaly_end']} "
+                f"(contrast={localization['contrast_ratio']:.2f})"
+            )
+
+            return anomalous_points[["timestamp", "value", "anomaly_score",
+                                     "localization_start", "localization_end",
+                                     "scale_hours", "contrast_ratio"]]
 
         return pd.DataFrame()
 
@@ -338,17 +360,25 @@ class LSTMStreamingDetector(BaseDetector):
         values_normalized = self.scaler.transform(values_array).flatten()
 
         # Compute score
-        is_anomaly, window_score, _, point_predictions = self._compute_sequence_score_and_errors(
+        is_anomaly, window_score, point_scores, point_predictions, raw_errors = self._compute_sequence_score_and_errors(
             values_normalized
         )
 
         if is_anomaly:
+            # Get timestamps for this window
+            window_timestamps = timestamps[-self.window_size:]
+
+            # Localize anomaly within the flagged window
+            # Use raw reconstruction errors for localization to match train.py behavior
+            localization = self.scorer.localize_anomaly(raw_errors, window_timestamps)
+
             result = {
                 "is_anomaly": True,
                 "score": float(window_score),
                 "start_time": timestamps[-self.window_size],
                 "end_time": timestamps[-1],
                 "window_size": self.window_size,
+                "localization": localization,
             }
 
             # Add threshold info based on scoring mode
