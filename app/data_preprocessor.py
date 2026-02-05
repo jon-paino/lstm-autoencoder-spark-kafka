@@ -29,7 +29,7 @@ SAMPLES_PER_WEEK = SAMPLES_PER_DAY * 7  # 336 samples per week
 
 # Known anomaly windows in NYC taxi dataset (precise timestamps from dataset labels)
 ANOMALY_WINDOWS = [
-    ("2014-10-30 15:30:00", "2014-11-02 22:30:00"),  # NYC Marathon
+    ("2014-11-01 19:00:00", "2014-11-03 22:30:00"),  # NYC Marathon (point: Nov 1 19:00)
     ("2014-11-25 12:00:00", "2014-11-29 19:00:00"),  # Thanksgiving
     ("2014-12-23 11:30:00", "2014-12-27 18:30:00"),  # Christmas
     ("2014-12-29 21:30:00", "2015-01-03 04:30:00"),  # New Year's
@@ -45,6 +45,14 @@ class PreprocessorConfig:
     val_weeks: int = 3     # Weeks for early stopping AND error distribution fitting
     threshold_weeks: int = 2  # Weeks for threshold calibration
     # Remaining weeks for testing
+
+    # Week bracketing configuration
+    offset_days: int = 5   # Days to offset from data start (5 = Sunday-Saturday weeks)
+                           # This ensures all anomaly points (including Jan 27 blizzard)
+                           # fall within complete weeks in the test set
+    min_anomaly_overlap: float = 0.10  # Minimum fraction of week that must overlap with
+                                        # anomaly window to label week as anomalous (10%)
+                                        # This prevents labeling weeks with tiny overlap
 
 
 class TimeSeriesDataset(Dataset):
@@ -129,16 +137,47 @@ class NYCTaxiPreprocessor:
                 return True
         return False
 
-    def _week_contains_anomaly(self, week_timestamps: pd.Series) -> bool:
-        """Check if any timestamp in a week falls within an anomaly window."""
-        return any(self._is_in_anomaly_window(ts) for ts in week_timestamps)
+    def _week_contains_anomaly(self, week_start: pd.Timestamp, week_end: pd.Timestamp) -> bool:
+        """
+        Check if a week contains sufficient anomaly overlap to be labeled anomalous.
+
+        A week is labeled anomalous if the overlap with any anomaly window
+        exceeds the configured min_anomaly_overlap threshold (default 10%).
+
+        Args:
+            week_start: Start timestamp of the week
+            week_end: End timestamp of the week
+
+        Returns:
+            True if week should be labeled as anomalous
+        """
+        for start, end in ANOMALY_WINDOWS:
+            win_start = pd.Timestamp(start)
+            win_end = pd.Timestamp(end)
+
+            # Check for overlap
+            if week_start <= win_end and week_end >= win_start:
+                # Calculate overlap
+                overlap_start = max(win_start, week_start)
+                overlap_end = min(win_end, week_end)
+
+                # Count overlap in 30-minute intervals
+                overlap_intervals = int((overlap_end - overlap_start).total_seconds() / 1800) + 1
+                overlap_fraction = overlap_intervals / SAMPLES_PER_WEEK
+
+                if overlap_fraction >= self.config.min_anomaly_overlap:
+                    return True
+
+        return False
 
     def segment_into_weeks(self, df: Optional[pd.DataFrame] = None) -> Tuple[np.ndarray, List[Dict]]:
         """
-        Segment the time series into weekly chunks.
+        Segment the time series into weekly chunks using offset-based bracketing.
 
-        Each week starts on Monday 00:00 and contains 336 records.
-        Incomplete weeks at the start/end are discarded.
+        Weeks are fixed 7-day windows (336 samples) starting from data_start + offset_days.
+        This approach ensures all known anomaly points fall within complete weeks,
+        particularly the Jan 27, 2015 blizzard which would otherwise be in an
+        incomplete week with ISO calendar alignment.
 
         Args:
             df: DataFrame with timestamp and value columns
@@ -153,38 +192,60 @@ class NYCTaxiPreprocessor:
         if df is None:
             raise ValueError("No data loaded. Call load_data() first.")
 
-        df = df.copy()
+        df = df.copy().sort_values("timestamp").reset_index(drop=True)
 
-        # Assign week number based on ISO calendar week
-        # This ensures weeks start on Monday
-        df["year"] = df["timestamp"].dt.isocalendar().year
-        df["week"] = df["timestamp"].dt.isocalendar().week
-        df["year_week"] = df["year"].astype(str) + "-" + df["week"].astype(str).str.zfill(2)
+        # Apply offset to start date
+        data_start = df["timestamp"].min()
+        offset_start = data_start + pd.Timedelta(days=self.config.offset_days)
+
+        # Filter to data after offset
+        df_subset = df[df["timestamp"] >= offset_start].reset_index(drop=True)
+
+        # Calculate number of complete weeks
+        num_complete_weeks = len(df_subset) // SAMPLES_PER_WEEK
 
         weeks = []
         week_info = []
 
-        for year_week, group in df.groupby("year_week", sort=True):
-            # Only keep complete weeks
-            if len(group) == SAMPLES_PER_WEEK:
-                values = group["value"].values.astype(np.float32)
-                weeks.append(values)
+        for w in range(num_complete_weeks):
+            start_idx = w * SAMPLES_PER_WEEK
+            end_idx = start_idx + SAMPLES_PER_WEEK
 
-                contains_anomaly = self._week_contains_anomaly(group["timestamp"])
+            week_data = df_subset.iloc[start_idx:end_idx]
+            values = week_data["value"].values.astype(np.float32)
 
-                week_info.append({
-                    "year_week": year_week,
-                    "start_date": group["timestamp"].min(),
-                    "end_date": group["timestamp"].max(),
-                    "is_anomaly": contains_anomaly,
-                    "mean_value": values.mean(),
-                    "std_value": values.std(),
-                })
-            else:
-                logger.debug(
-                    f"Skipping incomplete week {year_week}: {len(group)} records "
-                    f"(expected {SAMPLES_PER_WEEK})"
-                )
+            week_start = week_data["timestamp"].iloc[0]
+            week_end = week_data["timestamp"].iloc[-1]
+
+            # Use date-based naming (e.g., "2015-01-25" for start date)
+            week_name = week_start.strftime("%Y-%m-%d")
+
+            contains_anomaly = self._week_contains_anomaly(week_start, week_end)
+
+            weeks.append(values)
+            week_info.append({
+                "year_week": week_name,
+                "start_date": week_start,
+                "end_date": week_end,
+                "is_anomaly": contains_anomaly,
+                "mean_value": values.mean(),
+                "std_value": values.std(),
+            })
+
+        # Log skipped data due to offset
+        skipped_records = len(df) - len(df_subset)
+        if skipped_records > 0:
+            logger.debug(
+                f"Skipped {skipped_records} records before offset start "
+                f"({data_start} to {offset_start})"
+            )
+
+        # Log incomplete tail
+        tail_records = len(df_subset) % SAMPLES_PER_WEEK
+        if tail_records > 0:
+            logger.debug(
+                f"Skipped {tail_records} records at end (incomplete week)"
+            )
 
         self.weekly_data = np.array(weeks)
         self.week_info = week_info
@@ -192,7 +253,8 @@ class NYCTaxiPreprocessor:
         num_normal = sum(1 for w in week_info if not w["is_anomaly"])
         num_anomaly = sum(1 for w in week_info if w["is_anomaly"])
 
-        logger.info(f"Segmented into {len(weeks)} complete weeks")
+        logger.info(f"Segmented into {len(weeks)} complete weeks (offset={self.config.offset_days} days)")
+        logger.info(f"  Week start day: {offset_start.strftime('%A')}")
         logger.info(f"  Normal weeks: {num_normal}")
         logger.info(f"  Weeks with anomalies: {num_anomaly}")
 

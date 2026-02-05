@@ -153,18 +153,20 @@ class LSTMStreamingDetector(BaseDetector):
     def _compute_sequence_score_and_errors(
         self,
         sequence: np.ndarray
-    ) -> tuple[float, np.ndarray]:
+    ) -> tuple[bool, float, np.ndarray, np.ndarray]:
         """
         Compute anomaly score and point-wise errors for a sequence.
+
+        Supports both point-level (Malhotra paper) and window-level (legacy) scoring.
 
         Args:
             sequence: Normalized sequence of shape (seq_len,)
 
         Returns:
-            Tuple of (mahalanobis_score, point_wise_errors)
+            Tuple of (is_anomaly, window_score, point_scores, point_predictions)
         """
         if self.model is None or self.scorer is None:
-            return 0.0, np.zeros_like(sequence)
+            return False, 0.0, np.zeros_like(sequence), np.zeros_like(sequence, dtype=bool)
 
         # Reshape for model: (1, seq_len, 1)
         x = torch.FloatTensor(sequence).unsqueeze(0).unsqueeze(-1).to(self.device)
@@ -175,26 +177,53 @@ class LSTMStreamingDetector(BaseDetector):
         # Compute point-wise error
         error = torch.abs(x - x_reconstructed).cpu().numpy().squeeze()
 
-        # Compute Mahalanobis distance (sequence-level score)
-        mahalanobis_score = self.scorer._mahalanobis_distance(error)
-
-        # Compute standardized point-wise scores using the fitted distribution
-        # Higher values indicate more anomalous points within the sequence
-        point_scores = ((error - self.scorer.mu) ** 2) / (
-            np.diag(self.scorer.cov) + 1e-8
+        # Check if point-level scoring is available
+        use_point_level = (
+            self.scorer.mu_point is not None and
+            self.scorer.point_threshold is not None
         )
 
-        return mahalanobis_score, point_scores
+        if use_point_level:
+            # Point-level scoring (Malhotra et al. 2016)
+            # Compute per-point anomaly scores: (e - μ)² / σ²
+            point_scores = ((error - self.scorer.mu_point[0]) ** 2) / self.scorer.sigma_point[0]
+
+            # Point-level predictions
+            point_predictions = point_scores > self.scorer.point_threshold
+
+            # Window-level decision using HardCriterion
+            k = self.scorer.config.hard_criterion_k
+            num_anomalous_points = np.sum(point_predictions)
+            is_anomaly = num_anomalous_points >= k
+
+            # Window score: max point score for reporting
+            window_score = np.max(point_scores)
+
+            return is_anomaly, window_score, point_scores, point_predictions
+        else:
+            # Legacy window-level scoring
+            mahalanobis_score = self.scorer._mahalanobis_distance(error)
+            is_anomaly = mahalanobis_score > self.scorer.threshold
+
+            # Compute legacy point-wise scores for visualization
+            point_scores = ((error - self.scorer.mu) ** 2) / (
+                np.diag(self.scorer.cov) + 1e-8
+            )
+
+            return is_anomaly, mahalanobis_score, point_scores, np.zeros_like(error, dtype=bool)
 
     def detect(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Detect anomalies in the provided data.
 
         For LSTM detector, we analyze complete windows of data.
-        If the data contains enough samples, we run detection on
-        the most recent window. When an anomaly is detected, we
-        return only the specific points with highest reconstruction
-        error (top 5% of the window) for cleaner visualization.
+        Supports both point-level (Malhotra paper) and window-level (legacy) scoring.
+
+        Point-level mode: Uses HardCriterion (k points > τ) for window decision,
+        returns the specific points that exceeded the point threshold.
+
+        Window-level mode: Uses Mahalanobis distance for window decision,
+        returns top 5% highest reconstruction error points.
 
         Args:
             df: DataFrame with 'timestamp' and 'value' columns
@@ -219,8 +248,14 @@ class LSTMStreamingDetector(BaseDetector):
 
         # Analyze the most recent complete window
         window_data = values_normalized[-self.window_size:]
-        sequence_score, point_scores = self._compute_sequence_score_and_errors(
+        is_anomaly, window_score, point_scores, point_predictions = self._compute_sequence_score_and_errors(
             window_data
+        )
+
+        # Check if point-level scoring is being used
+        use_point_level = (
+            self.scorer.mu_point is not None and
+            self.scorer.point_threshold is not None
         )
 
         # Log detailed scoring information
@@ -228,37 +263,48 @@ class LSTMStreamingDetector(BaseDetector):
             f"  Scoring: raw_range=[{values.min():.0f}, {values.max():.0f}], "
             f"normalized_range=[{values_normalized.min():.4f}, {values_normalized.max():.4f}]"
         )
-        logger.info(
-            f"  Score: {sequence_score:.2f} vs threshold: {self.scorer.threshold:.2f} "
-            f"-> {'ANOMALY' if sequence_score > self.scorer.threshold else 'NORMAL'}"
-        )
 
-        # Check if window is anomalous
-        is_anomaly = sequence_score > self.scorer.threshold
+        if use_point_level:
+            num_anomalous = point_predictions.sum()
+            k = self.scorer.config.hard_criterion_k
+            logger.info(
+                f"  Point-level: {num_anomalous} pts > τ={self.scorer.point_threshold:.2f} "
+                f"(k={k}) -> {'ANOMALY' if is_anomaly else 'NORMAL'}"
+            )
+        else:
+            logger.info(
+                f"  Window-level: score={window_score:.2f} vs threshold={self.scorer.threshold:.2f} "
+                f"-> {'ANOMALY' if is_anomaly else 'NORMAL'}"
+            )
 
         if is_anomaly:
             # Get the window DataFrame
             window_df = df.tail(self.window_size).copy().reset_index(drop=True)
-
-            # Add point-wise scores
             window_df["point_score"] = point_scores
 
-            # Find the most anomalous points within the window
-            # Use 95th percentile of point scores as threshold
-            point_threshold = np.percentile(point_scores, 95)
-            anomalous_mask = point_scores >= point_threshold
+            if use_point_level:
+                # Return points that exceeded the point threshold
+                anomalous_mask = point_predictions
+                anomalous_points = window_df[anomalous_mask].copy()
+                anomalous_points["anomaly_score"] = window_score
 
-            # Get only the high-error points for visualization
-            anomalous_points = window_df[anomalous_mask].copy()
+                logger.info(
+                    f"LSTM detected anomaly (point-level)! "
+                    f"{point_predictions.sum()} points exceed τ={self.scorer.point_threshold:.2f}, "
+                    f"returning {len(anomalous_points)} anomalous points"
+                )
+            else:
+                # Legacy: use top 5% of point scores
+                point_threshold = np.percentile(point_scores, 95)
+                anomalous_mask = point_scores >= point_threshold
+                anomalous_points = window_df[anomalous_mask].copy()
+                anomalous_points["anomaly_score"] = window_score
 
-            # Use the sequence-level Mahalanobis score for consistency
-            anomalous_points["anomaly_score"] = sequence_score
-
-            logger.info(
-                f"LSTM detected anomaly! Sequence score: {sequence_score:.2f} "
-                f"(threshold: {self.scorer.threshold:.2f}), "
-                f"returning {len(anomalous_points)} high-error points"
-            )
+                logger.info(
+                    f"LSTM detected anomaly (window-level)! "
+                    f"Score: {window_score:.2f} (threshold: {self.scorer.threshold:.2f}), "
+                    f"returning {len(anomalous_points)} high-error points"
+                )
 
             return anomalous_points[["timestamp", "value", "anomaly_score"]]
 
@@ -292,17 +338,29 @@ class LSTMStreamingDetector(BaseDetector):
         values_normalized = self.scaler.transform(values_array).flatten()
 
         # Compute score
-        score = self._compute_sequence_score(values_normalized)
+        is_anomaly, window_score, _, point_predictions = self._compute_sequence_score_and_errors(
+            values_normalized
+        )
 
-        if score > self.scorer.threshold:
-            return {
+        if is_anomaly:
+            result = {
                 "is_anomaly": True,
-                "score": float(score),
-                "threshold": float(self.scorer.threshold),
+                "score": float(window_score),
                 "start_time": timestamps[-self.window_size],
                 "end_time": timestamps[-1],
                 "window_size": self.window_size,
             }
+
+            # Add threshold info based on scoring mode
+            use_point_level = self.scorer.mu_point is not None and self.scorer.point_threshold is not None
+            if use_point_level:
+                result["threshold"] = float(self.scorer.point_threshold)
+                result["anomalous_points"] = int(point_predictions.sum())
+                result["hard_criterion_k"] = self.scorer.config.hard_criterion_k
+            else:
+                result["threshold"] = float(self.scorer.threshold)
+
+            return result
 
         return None
 
@@ -317,8 +375,16 @@ class LSTMStreamingDetector(BaseDetector):
         }
 
         if self._is_loaded and self.scorer is not None:
-            stats["threshold"] = float(self.scorer.threshold)
+            stats["threshold"] = float(self.scorer.threshold) if self.scorer.threshold else None
             stats["threshold_method"] = self.scorer.config.threshold_method
+            stats["scoring_mode"] = self.scorer.config.scoring_mode
+
+            # Point-level scoring info
+            if self.scorer.mu_point is not None:
+                stats["point_threshold"] = float(self.scorer.point_threshold) if self.scorer.point_threshold else None
+                stats["hard_criterion_k"] = self.scorer.config.hard_criterion_k
+                stats["mu_point"] = float(self.scorer.mu_point[0])
+                stats["sigma_point"] = float(self.scorer.sigma_point[0]) if self.scorer.sigma_point is not None else None
 
         if self._load_error:
             stats["load_error"] = self._load_error

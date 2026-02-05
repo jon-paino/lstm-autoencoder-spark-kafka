@@ -363,6 +363,45 @@ def main():
         default=4,
         help="Number of normal weeks for threshold calibration"
     )
+    parser.add_argument(
+        "--scoring-mode",
+        type=str,
+        default="point",
+        choices=["point", "window"],
+        help="Scoring mode: 'point' (Malhotra paper) or 'window' (legacy)"
+    )
+    parser.add_argument(
+        "--hard-criterion-k",
+        type=int,
+        default=5,
+        help="Number of anomalous points to flag window as anomalous (HardCriterion)"
+    )
+    # Synthetic anomaly calibration arguments
+    parser.add_argument(
+        "--use-synthetic-anomalies",
+        action="store_true",
+        help="Use synthetic anomalies for threshold calibration (improves threshold selection)"
+    )
+    parser.add_argument(
+        "--synthetic-anomaly-types",
+        type=str,
+        nargs="+",
+        default=["point", "level_shift"],
+        help="Types of synthetic anomalies to generate (point, level_shift, noise, temporal)"
+    )
+    parser.add_argument(
+        "--threshold-calibration-method",
+        type=str,
+        default="midpoint",
+        choices=["midpoint", "f1_max", "youden", "percentile"],
+        help="Method for threshold calibration when using synthetic anomalies"
+    )
+    parser.add_argument(
+        "--synthetic-magnitude",
+        type=float,
+        default=1,
+        help="Base magnitude for synthetic anomalies (in std units)"
+    )
     args = parser.parse_args()
 
     # Setup logging
@@ -430,37 +469,158 @@ def main():
 
     # Step 4: Fit anomaly scorer
     print("\n" + "-" * 40)
-    print("Step 4: Fitting anomaly scorer")
+    print(f"Step 4: Fitting anomaly scorer (mode={args.scoring_mode})")
     print("-" * 40)
 
-    scorer = AnomalyScorer(
-        config=ScorerConfig(threshold_percentile=args.threshold_percentile)
+    scorer_config = ScorerConfig(
+        threshold_percentile=args.threshold_percentile,
+        scoring_mode=args.scoring_mode,
+        hard_criterion_k=args.hard_criterion_k,
     )
+    scorer = AnomalyScorer(config=scorer_config)
 
     # Fit error distribution on validation data (paper recommendation: vN1)
     # The model hasn't optimized on val data, so errors there are more realistic
     scorer.fit(model, dataloaders["val"], device)
 
-    # Set threshold using percentile method on normal validation data
-    val_scores, _ = scorer.compute_scores(
-        model, dataloaders["threshold_val"], device
-    )
-    scorer.set_threshold(val_scores)
+    if args.use_synthetic_anomalies:
+        # Synthetic anomaly calibration: generate synthetic anomalies and find optimal threshold
+        from synthetic_anomaly import SyntheticAnomalyGenerator, SyntheticAnomalyConfig
+        from torch.utils.data import DataLoader as TorchDataLoader
+
+        print(f"\nUsing synthetic anomalies for threshold calibration")
+        print(f"  Anomaly types: {args.synthetic_anomaly_types}")
+        print(f"  Calibration method: {args.threshold_calibration_method}")
+
+        # Configure synthetic anomaly generation
+        synth_config = SyntheticAnomalyConfig(
+            anomaly_types=args.synthetic_anomaly_types,
+            num_synthetic_per_normal=1,
+            point_magnitude=args.synthetic_magnitude,
+            level_shift_magnitude=args.synthetic_magnitude,
+            noise_scale=args.synthetic_magnitude * 0.6,
+        )
+        generator = SyntheticAnomalyGenerator(synth_config)
+
+        # Generate synthetic anomalies from threshold_val normal weeks
+        synthetic_weeks, _, anomaly_types = generator.generate_synthetic_dataset(
+            normalized_splits["threshold_val"]
+        )
+
+        # Create synthetic DataLoader
+        from data_preprocessor import TimeSeriesDataset
+        synthetic_dataset = TimeSeriesDataset(synthetic_weeks)
+        synthetic_loader = TorchDataLoader(
+            synthetic_dataset,
+            batch_size=args.batch_size,
+            shuffle=False
+        )
+
+        if args.scoring_mode == "point":
+            # Compute point-level scores for both normal and synthetic
+            normal_point_scores, normal_window_scores, _ = scorer.compute_point_scores(
+                model, dataloaders["threshold_val"], device
+            )
+            synth_point_scores, synth_window_scores, _ = scorer.compute_point_scores(
+                model, synthetic_loader, device
+            )
+
+            if args.threshold_calibration_method != "percentile":
+                # Find optimal point-level threshold using labeled data
+                optimal_point_threshold, point_metrics = scorer.find_optimal_threshold(
+                    normal_point_scores.flatten(),
+                    synth_point_scores.flatten(),
+                    method=args.threshold_calibration_method
+                )
+                scorer.point_threshold = optimal_point_threshold
+                print(f"  Point threshold (optimal): {optimal_point_threshold:.4f}")
+                print(f"  Calibration metrics: {point_metrics}")
+
+                # Find optimal window-level threshold
+                optimal_window_threshold, window_metrics = scorer.find_optimal_threshold(
+                    normal_window_scores,
+                    synth_window_scores,
+                    method=args.threshold_calibration_method
+                )
+                scorer.threshold = optimal_window_threshold
+                print(f"  Window threshold (optimal): {optimal_window_threshold:.4f}")
+            else:
+                # Fall back to percentile-based threshold
+                scorer.set_point_threshold(normal_point_scores)
+                scorer.set_threshold(normal_window_scores)
+        else:
+            # Window-level scoring with synthetic calibration
+            normal_scores, _ = scorer.compute_scores(
+                model, dataloaders["threshold_val"], device
+            )
+            synth_scores, _ = scorer.compute_scores(
+                model, synthetic_loader, device
+            )
+
+            if args.threshold_calibration_method != "percentile":
+                optimal_threshold, metrics = scorer.find_optimal_threshold(
+                    normal_scores,
+                    synth_scores,
+                    method=args.threshold_calibration_method
+                )
+                scorer.threshold = optimal_threshold
+                print(f"  Window threshold (optimal): {optimal_threshold:.4f}")
+                print(f"  Calibration metrics: {metrics}")
+            else:
+                scorer.set_threshold(normal_scores)
+
+    else:
+        # Standard percentile-based threshold calibration (original behavior)
+        if args.scoring_mode == "point":
+            # Point-level scoring (Malhotra et al. 2016)
+            point_scores, window_scores, _ = scorer.compute_point_scores(
+                model, dataloaders["threshold_val"], device
+            )
+            scorer.set_point_threshold(point_scores)
+            # Also set window-level threshold for max-score aggregation
+            scorer.set_threshold(window_scores)
+        else:
+            # Legacy window-level scoring
+            val_scores, _ = scorer.compute_scores(
+                model, dataloaders["threshold_val"], device
+            )
+            scorer.set_threshold(val_scores)
 
     # Step 5: Evaluate on test set
     print("\n" + "-" * 40)
     print("Step 5: Evaluating on test set")
     print("-" * 40)
 
-    test_scores, test_errors = scorer.compute_scores(
-        model, dataloaders["test"], device
-    )
-    predictions = scorer.predict(test_scores)
-
     # Get test week info
     test_week_info = preprocessor.get_test_week_info()
 
-    print("\nTest Results:")
+    if args.scoring_mode == "point":
+        # Point-level scoring
+        point_scores, window_scores, _ = scorer.compute_point_scores(
+            model, dataloaders["test"], device
+        )
+        point_predictions = scorer.predict_points(point_scores)
+        predictions = scorer.predict_windows_from_points(point_predictions)
+
+        # Report point-level statistics
+        total_points = point_predictions.size
+        anomalous_points = point_predictions.sum()
+        print(f"\nPoint-Level Statistics:")
+        print(f"  Total points: {total_points}")
+        print(f"  Anomalous points: {anomalous_points} ({100*anomalous_points/total_points:.2f}%)")
+        print(f"  Point threshold: {scorer.point_threshold:.4f}")
+        print(f"  HardCriterion k: {args.hard_criterion_k}")
+
+        # Use window_scores for display
+        test_scores = window_scores
+    else:
+        # Legacy window-level scoring
+        test_scores, _ = scorer.compute_scores(
+            model, dataloaders["test"], device
+        )
+        predictions = scorer.predict(test_scores)
+
+    print("\nTest Results (Window-Level):")
     print(f"{'Week':<10} {'Score':>12} {'Predicted':>10} {'Actual':>12} {'Match':>6}")
     print("-" * 52)
 
@@ -491,7 +651,7 @@ def main():
     recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
 
-    print(f"\nAnomaly Detection Metrics:")
+    print(f"\nWindow-Level Anomaly Detection Metrics:")
     print(f"  Precision: {precision:.2%}")
     print(f"  Recall: {recall:.2%}")
     print(f"  F1-Score: {f1:.2%}")

@@ -99,6 +99,170 @@ def evaluate_detector(
     return results
 
 
+def evaluate_point_level(
+    model: EncDecAD,
+    scorer: AnomalyScorer,
+    test_loader: DataLoader,
+    test_week_info: List[Dict],
+    device: torch.device,
+    beta: float = 1.0
+) -> Dict:
+    """
+    Evaluate point-level and window-level anomaly detection performance.
+
+    Computes metrics at both granularities:
+    - Point-level: Each of the 336 time points per window evaluated individually
+    - Window-level: HardCriterion (k points exceed threshold => window is anomaly)
+
+    Args:
+        model: Trained LSTM encoder-decoder
+        scorer: Fitted anomaly scorer with point threshold
+        test_loader: DataLoader with test sequences
+        test_week_info: List of week metadata dicts
+        device: Device for inference
+        beta: Beta value for F_beta score (beta < 1 weights precision more)
+
+    Returns:
+        Dict with point-level and window-level evaluation results
+    """
+    from data_preprocessor import ANOMALY_WINDOWS
+    import pandas as pd
+
+    # Get point-level scores and predictions
+    point_scores, window_scores, _ = scorer.compute_point_scores(model, test_loader, device)
+    point_predictions = scorer.predict_points(point_scores)
+
+    # Window-level predictions using HardCriterion
+    window_predictions = scorer.predict_windows_from_points(point_predictions)
+    window_actuals = np.array([w["is_anomaly"] for w in test_week_info])
+
+    # Window-level confusion matrix
+    w_tp = np.sum(window_predictions & window_actuals)
+    w_fp = np.sum(window_predictions & ~window_actuals)
+    w_fn = np.sum(~window_predictions & window_actuals)
+    w_tn = np.sum(~window_predictions & ~window_actuals)
+
+    w_precision = w_tp / (w_tp + w_fp) if (w_tp + w_fp) > 0 else 0
+    w_recall = w_tp / (w_tp + w_fn) if (w_tp + w_fn) > 0 else 0
+    w_f1 = 2 * w_precision * w_recall / (w_precision + w_recall) if (w_precision + w_recall) > 0 else 0
+    w_accuracy = (w_tp + w_tn) / len(window_predictions)
+
+    # Build point-level ground truth from known anomaly windows
+    def is_point_in_anomaly(week_start, point_idx):
+        """Check if a specific point falls within known anomaly windows."""
+        point_time = pd.Timestamp(week_start) + pd.Timedelta(minutes=30 * point_idx)
+        for start, end in ANOMALY_WINDOWS:
+            if pd.Timestamp(start) <= point_time <= pd.Timestamp(end):
+                return True
+        return False
+
+    # Create point-level ground truth
+    point_actuals = np.zeros_like(point_predictions, dtype=bool)
+    for i, week in enumerate(test_week_info):
+        for j in range(point_scores.shape[1]):
+            point_actuals[i, j] = is_point_in_anomaly(week["start_date"], j)
+
+    # Point-level confusion matrix
+    p_tp = np.sum(point_predictions & point_actuals)
+    p_fp = np.sum(point_predictions & ~point_actuals)
+    p_fn = np.sum(~point_predictions & point_actuals)
+    p_tn = np.sum(~point_predictions & ~point_actuals)
+
+    p_precision = p_tp / (p_tp + p_fp) if (p_tp + p_fp) > 0 else 0
+    p_recall = p_tp / (p_tp + p_fn) if (p_tp + p_fn) > 0 else 0
+    p_f_beta = (1 + beta**2) * p_precision * p_recall / (beta**2 * p_precision + p_recall) if (p_precision + p_recall) > 0 else 0
+
+    return {
+        "point_scores": point_scores,
+        "point_predictions": point_predictions,
+        "point_actuals": point_actuals,
+        "window_scores": window_scores,
+        "window_predictions": window_predictions,
+        "window_actuals": window_actuals,
+        "week_info": test_week_info,
+        "point_threshold": scorer.point_threshold,
+        "hard_criterion_k": scorer.config.hard_criterion_k,
+        "point_metrics": {
+            "true_positives": int(p_tp),
+            "false_positives": int(p_fp),
+            "false_negatives": int(p_fn),
+            "true_negatives": int(p_tn),
+            "precision": float(p_precision),
+            "recall": float(p_recall),
+            f"f_{beta}": float(p_f_beta),
+        },
+        "window_metrics": {
+            "true_positives": int(w_tp),
+            "false_positives": int(w_fp),
+            "false_negatives": int(w_fn),
+            "true_negatives": int(w_tn),
+            "precision": float(w_precision),
+            "recall": float(w_recall),
+            "f1_score": float(w_f1),
+            "accuracy": float(w_accuracy),
+        }
+    }
+
+
+def print_point_level_report(results: Dict) -> None:
+    """Print a formatted point-level evaluation report."""
+    p_metrics = results["point_metrics"]
+    w_metrics = results["window_metrics"]
+
+    print("\n" + "=" * 60)
+    print("POINT-LEVEL EVALUATION REPORT")
+    print("=" * 60)
+
+    print(f"\nScoring Configuration:")
+    print(f"  Point threshold (τ): {results['point_threshold']:.4f}")
+    print(f"  HardCriterion k: {results['hard_criterion_k']}")
+
+    print("\n" + "-" * 40)
+    print("Point-Level Metrics")
+    print("-" * 40)
+    print(f"\nConfusion Matrix (Points):")
+    print(f"                    Predicted")
+    print(f"                 Normal  Anomaly")
+    print(f"  Actual Normal  {p_metrics['true_negatives']:6d}   {p_metrics['false_positives']:6d}")
+    print(f"  Actual Anomaly {p_metrics['false_negatives']:6d}   {p_metrics['true_positives']:6d}")
+
+    print("\nMetrics:")
+    print(f"  Precision: {p_metrics['precision']:.2%}")
+    print(f"  Recall:    {p_metrics['recall']:.2%}")
+    # Find F_beta key
+    f_beta_key = [k for k in p_metrics.keys() if k.startswith("f_")][0]
+    print(f"  {f_beta_key.upper()}: {p_metrics[f_beta_key]:.2%}")
+
+    print("\n" + "-" * 40)
+    print("Window-Level Metrics (HardCriterion)")
+    print("-" * 40)
+    print(f"\nConfusion Matrix (Windows):")
+    print(f"                    Predicted")
+    print(f"                 Normal  Anomaly")
+    print(f"  Actual Normal    {w_metrics['true_negatives']:3d}      {w_metrics['false_positives']:3d}")
+    print(f"  Actual Anomaly   {w_metrics['false_negatives']:3d}      {w_metrics['true_positives']:3d}")
+
+    print("\nMetrics:")
+    print(f"  Precision: {w_metrics['precision']:.2%}")
+    print(f"  Recall:    {w_metrics['recall']:.2%}")
+    print(f"  F1-Score:  {w_metrics['f1_score']:.2%}")
+    print(f"  Accuracy:  {w_metrics['accuracy']:.2%}")
+
+    print("\nPer-Week Results:")
+    print(f"{'Week':<10} {'MaxScore':>12} {'AnomalyPts':>12} {'Predicted':>10} {'Actual':>10} {'Match':>6}")
+    print("-" * 66)
+
+    for i, week in enumerate(results["week_info"]):
+        max_score = results["window_scores"][i]
+        anomaly_pts = results["point_predictions"][i].sum()
+        pred = results["window_predictions"][i]
+        actual = results["window_actuals"][i]
+        pred_str = "ANOMALY" if pred else "normal"
+        actual_str = "ANOMALY" if actual else "normal"
+        match_str = "✓" if pred == actual else "✗"
+        print(f"{week['year_week']:<10} {max_score:>12.2f} {anomaly_pts:>12d} {pred_str:>10} {actual_str:>10} {match_str:>6}")
+
+
 def print_evaluation_report(results: Dict) -> None:
     """Print a formatted evaluation report."""
     metrics = results["metrics"]
@@ -345,6 +509,96 @@ def plot_training_history(
     return fig
 
 
+def plot_point_level_scores(
+    point_scores: np.ndarray,
+    point_actuals: np.ndarray,
+    threshold: float,
+    week_info: List[Dict],
+    save_path: Optional[str] = None
+) -> Optional[object]:
+    """
+    Visualize point-level anomaly scores for test windows.
+
+    Shows point scores over time with threshold line and ground truth shading.
+
+    Args:
+        point_scores: Shape (num_windows, seq_len)
+        point_actuals: Shape (num_windows, seq_len) boolean ground truth
+        threshold: Point-level threshold τ
+        week_info: Metadata for each window
+        save_path: Optional path to save figure
+
+    Returns:
+        matplotlib figure if available
+    """
+    if not HAS_MATPLOTLIB:
+        logger.warning("matplotlib not available, skipping plot")
+        return None
+
+    # Find windows with anomalies
+    anomaly_window_indices = [i for i, w in enumerate(week_info) if w["is_anomaly"]]
+
+    if not anomaly_window_indices:
+        logger.warning("No anomaly windows in test set for visualization")
+        return None
+
+    n_windows = min(len(anomaly_window_indices), 3)  # Show up to 3 anomaly windows
+    fig, axes = plt.subplots(n_windows, 1, figsize=(14, 4 * n_windows))
+
+    if n_windows == 1:
+        axes = [axes]
+
+    for ax_idx, window_idx in enumerate(anomaly_window_indices[:n_windows]):
+        ax = axes[ax_idx]
+        scores = point_scores[window_idx]
+        actuals = point_actuals[window_idx]
+        week = week_info[window_idx]
+
+        hours = np.arange(len(scores)) * 0.5
+
+        # Plot scores
+        ax.plot(hours, scores, 'b-', alpha=0.7, linewidth=1, label='Point Score')
+        ax.axhline(y=threshold, color='r', linestyle='--', linewidth=2, label=f'Threshold: {threshold:.2f}')
+
+        # Shade ground truth anomaly regions
+        # Find contiguous anomaly regions
+        in_anomaly = False
+        start_idx = 0
+        for i, is_anom in enumerate(actuals):
+            if is_anom and not in_anomaly:
+                start_idx = i
+                in_anomaly = True
+            elif not is_anom and in_anomaly:
+                ax.axvspan(start_idx * 0.5, i * 0.5, alpha=0.3, color='red',
+                          label='Ground Truth Anomaly' if start_idx == 0 or ax_idx > 0 else '_')
+                in_anomaly = False
+        if in_anomaly:
+            ax.axvspan(start_idx * 0.5, len(actuals) * 0.5, alpha=0.3, color='red')
+
+        # Highlight points above threshold
+        above_threshold = scores > threshold
+        ax.scatter(hours[above_threshold], scores[above_threshold],
+                  color='red', s=20, zorder=5, label=f'Above threshold ({above_threshold.sum()} pts)')
+
+        ax.set_xlabel('Hours from Week Start')
+        ax.set_ylabel('Point Anomaly Score')
+        ax.set_title(f"Week {week['year_week']} - Point-Level Scores")
+        ax.legend(loc='upper right')
+        ax.grid(True, alpha=0.3)
+
+        # Add day markers
+        for day in range(1, 7):
+            ax.axvline(x=day * 24, color='gray', linestyle=':', alpha=0.5)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        logger.info(f"Saved point-level scores plot to {save_path}")
+
+    return fig
+
+
 def plot_weekly_comparison(
     model: EncDecAD,
     sequences: np.ndarray,
@@ -499,25 +753,41 @@ def main():
     preprocessor = NYCTaxiPreprocessor(config=preprocess_config)
     dataloaders, normalized_splits = preprocessor.preprocess(args.data_path, batch_size=1)
 
+    # Detect scoring mode from loaded scorer
+    use_point_level = scorer.mu_point is not None and scorer.point_threshold is not None
+    scoring_mode = "point" if use_point_level else "window"
+    print(f"\nScoring mode: {scoring_mode}-level")
+
     # Compute train scores (for distribution plot)
     print("\nComputing scores...")
     train_scores, _ = scorer.compute_scores(model, dataloaders["train"], device)
 
     # Evaluate on test set
     test_week_info = preprocessor.get_test_week_info()
-    results = evaluate_detector(
-        model=model,
-        scorer=scorer,
-        test_loader=dataloaders["test"],
-        test_week_info=test_week_info,
-        device=device
-    )
 
-    # Print report
-    print_evaluation_report(results)
+    if use_point_level:
+        # Point-level evaluation
+        results = evaluate_point_level(
+            model=model,
+            scorer=scorer,
+            test_loader=dataloaders["test"],
+            test_week_info=test_week_info,
+            device=device
+        )
+        print_point_level_report(results)
+    else:
+        # Window-level evaluation (legacy)
+        results = evaluate_detector(
+            model=model,
+            scorer=scorer,
+            test_loader=dataloaders["test"],
+            test_week_info=test_week_info,
+            device=device
+        )
+        print_evaluation_report(results)
 
     # Save results
-    results_path = output_dir / "evaluation_results.pkl"
+    results_path = output_dir / f"evaluation_results_{scoring_mode}.pkl"
     with open(results_path, "wb") as f:
         # Convert numpy arrays for pickling
         save_results = {
@@ -534,25 +804,44 @@ def main():
         # Training history
         plot_training_history(
             history,
-            save_path=output_dir / "training_history.png"
+            save_path=output_dir / f"training_history_{scoring_mode}.png"
         )
 
-        # Score distribution
-        plot_score_distribution(
-            train_scores=train_scores,
-            test_scores=results["scores"],
-            test_actuals=results["actuals"],
-            threshold=results["threshold"],
-            save_path=output_dir / "score_distribution.png"
-        )
+        if use_point_level:
+            # Point-level plots
+            plot_score_distribution(
+                train_scores=train_scores,
+                test_scores=results["window_scores"],
+                test_actuals=results["window_actuals"],
+                threshold=scorer.threshold if scorer.threshold else results["window_scores"].max(),
+                save_path=output_dir / f"score_distribution_{scoring_mode}.png"
+            )
 
-        # Weekly comparison
+            # Point-level score visualization
+            plot_point_level_scores(
+                point_scores=results["point_scores"],
+                point_actuals=results["point_actuals"],
+                threshold=results["point_threshold"],
+                week_info=test_week_info,
+                save_path=output_dir / f"point_level_scores_{scoring_mode}.png"
+            )
+        else:
+            # Window-level plots
+            plot_score_distribution(
+                train_scores=train_scores,
+                test_scores=results["scores"],
+                test_actuals=results["actuals"],
+                threshold=results["threshold"],
+                save_path=output_dir / f"score_distribution_{scoring_mode}.png"
+            )
+
+        # Weekly comparison (works for both modes)
         plot_weekly_comparison(
             model=model,
             sequences=normalized_splits["test"],
             week_info=test_week_info,
             device=device,
-            save_path=output_dir / "weekly_comparison.png"
+            save_path=output_dir / f"weekly_comparison_{scoring_mode}.png"
         )
 
         # Individual reconstructions for anomaly weeks
@@ -563,7 +852,7 @@ def main():
                     sequence=normalized_splits["test"][i],
                     device=device,
                     title=f"Week {week['year_week']}",
-                    save_path=output_dir / f"reconstruction_{week['year_week']}.png"
+                    save_path=output_dir / f"reconstruction_{week['year_week']}_{scoring_mode}.png"
                 )
 
         print(f"\nPlots saved to {output_dir}/")
