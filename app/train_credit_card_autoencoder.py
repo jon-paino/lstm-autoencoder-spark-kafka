@@ -19,7 +19,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from credit_card_preprocessor import CreditCardPreprocessor, CreditCardPreprocessorConfig
-from feedforward_autoencoder import AutoencoderConfig, FeedforwardAutoencoder
+from feedforward_autoencoder import AutoencoderConfig, FeedforwardAutoencoder, SemiSupervisedAutoencoder
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +279,300 @@ def train_autoencoder(
     return model, history
 
 
+def train_autoencoder_fixed_epochs(
+    model: FeedforwardAutoencoder,
+    train_loader: DataLoader,
+    device: torch.device,
+    config: TrainingConfig,
+    fixed_epochs: int = 50
+) -> Tuple[FeedforwardAutoencoder, Dict]:
+    """
+    Train autoencoder for fixed epochs without validation (matches paper's setup).
+
+    No early stopping - trains for exactly 'fixed_epochs' epochs.
+    Uses full 70% training data instead of 56%.
+
+    Args:
+        model: FeedforwardAutoencoder to train
+        train_loader: Training DataLoader (full 70% of data)
+        device: cpu/cuda
+        config: Training hyperparameters
+        fixed_epochs: Number of epochs to train
+
+    Returns:
+        (trained_model, history)
+    """
+    logger.info("=" * 80)
+    logger.info("Training Feedforward Autoencoder (FIXED EPOCHS - NO VALIDATION)")
+    logger.info("=" * 80)
+    logger.info(f"Device: {device}")
+    logger.info(f"Fixed epochs: {fixed_epochs}")
+    logger.info(f"Learning rate: {config.learning_rate}")
+    logger.info(f"Batch size: {config.batch_size}")
+    logger.info("NO early stopping - training for fixed epochs")
+    logger.info("=" * 80)
+
+    # Loss and optimizer
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=config.learning_rate,
+        weight_decay=config.weight_decay
+    )
+
+    # Training history
+    history = {
+        'train_loss': [],
+        'val_loss': [],  # Empty, but kept for compatibility
+        'train_loss_fraud': [],
+        'train_loss_legitimate': [],
+        'best_epoch': fixed_epochs - 1  # Last epoch is "best" since no validation
+    }
+
+    # Training loop
+    for epoch in range(fixed_epochs):
+        model.train()
+        train_loss_total = 0.0
+        train_loss_fraud = 0.0
+        train_loss_legit = 0.0
+        num_fraud = 0
+        num_legit = 0
+        num_samples = 0
+
+        for features, labels in train_loader:
+            features, labels = features.to(device), labels.to(device)
+
+            # Forward pass
+            optimizer.zero_grad()
+            reconstructed = model(features)
+            loss = criterion(reconstructed, features)
+
+            # Backward pass
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+            optimizer.step()
+
+            # Track overall loss
+            batch_size = len(features)
+            train_loss_total += loss.item() * batch_size
+            num_samples += batch_size
+
+            # Track per-class reconstruction error
+            fraud_mask = labels == 1
+            legit_mask = labels == 0
+
+            if fraud_mask.sum() > 0:
+                with torch.no_grad():
+                    fraud_loss = criterion(
+                        reconstructed[fraud_mask],
+                        features[fraud_mask]
+                    )
+                    train_loss_fraud += fraud_loss.item() * fraud_mask.sum().item()
+                    num_fraud += fraud_mask.sum().item()
+
+            if legit_mask.sum() > 0:
+                with torch.no_grad():
+                    legit_loss = criterion(
+                        reconstructed[legit_mask],
+                        features[legit_mask]
+                    )
+                    train_loss_legit += legit_loss.item() * legit_mask.sum().item()
+                    num_legit += legit_mask.sum().item()
+
+        # Compute epoch averages
+        train_loss = train_loss_total / num_samples
+        fraud_loss_avg = train_loss_fraud / num_fraud if num_fraud > 0 else 0
+        legit_loss_avg = train_loss_legit / num_legit if num_legit > 0 else 0
+
+        # Record history
+        history['train_loss'].append(train_loss)
+        history['train_loss_fraud'].append(fraud_loss_avg)
+        history['train_loss_legitimate'].append(legit_loss_avg)
+
+        # Log progress (no validation loss)
+        logger.info(
+            f"Epoch {epoch + 1:3d}/{fixed_epochs} | "
+            f"Train: {train_loss:.6f} | "
+            f"Fraud: {fraud_loss_avg:.6f} | "
+            f"Legit: {legit_loss_avg:.6f}"
+        )
+
+    logger.info("=" * 80)
+    logger.info(f"Training complete! Trained for {fixed_epochs} epochs.")
+    logger.info("=" * 80)
+
+    return model, history
+
+
+def train_semi_supervised_autoencoder(
+    model: SemiSupervisedAutoencoder,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    device: torch.device,
+    config: TrainingConfig,
+    classification_lambda: float = 0.01
+) -> Tuple[SemiSupervisedAutoencoder, Dict]:
+    """
+    Train autoencoder with combined reconstruction + classification loss.
+
+    Loss: L = L_reconstruction + λ * L_classification
+
+    This encourages the latent representation to preserve fraud-relevant
+    information that pure reconstruction would discard.
+
+    Args:
+        model: SemiSupervisedAutoencoder to train
+        train_loader: Training DataLoader
+        val_loader: Validation DataLoader
+        device: cpu/cuda
+        config: Training hyperparameters
+        classification_lambda: Weight for classification loss (default: 0.01)
+
+    Returns:
+        (trained_model, history)
+    """
+    logger.info("=" * 80)
+    logger.info("Training Semi-Supervised Autoencoder")
+    logger.info("=" * 80)
+    logger.info(f"Device: {device}")
+    logger.info(f"Epochs: {config.epochs}")
+    logger.info(f"Learning rate: {config.learning_rate}")
+    logger.info(f"Classification lambda: {classification_lambda}")
+    logger.info(f"Early stopping patience: {config.patience}")
+    logger.info("=" * 80)
+
+    # Losses
+    recon_criterion = nn.MSELoss()
+    class_criterion = nn.BCEWithLogitsLoss()
+
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=config.learning_rate,
+        weight_decay=config.weight_decay
+    )
+
+    early_stopping = EarlyStopping(
+        patience=config.patience,
+        min_delta=config.min_delta
+    )
+
+    history = {
+        'train_loss': [],
+        'train_recon_loss': [],
+        'train_class_loss': [],
+        'val_loss': [],
+        'train_loss_fraud': [],
+        'train_loss_legitimate': [],
+        'best_epoch': 0
+    }
+
+    best_val_loss = float('inf')
+    best_model_state = None
+
+    for epoch in range(config.epochs):
+        model.train()
+        train_loss_total = 0.0
+        train_recon_total = 0.0
+        train_class_total = 0.0
+        train_loss_fraud = 0.0
+        train_loss_legit = 0.0
+        num_fraud = 0
+        num_legit = 0
+        num_samples = 0
+
+        for features, labels in train_loader:
+            features, labels = features.to(device), labels.to(device)
+
+            optimizer.zero_grad()
+
+            # Forward pass
+            reconstructed, class_logit = model(features)
+
+            # Reconstruction loss
+            recon_loss = recon_criterion(reconstructed, features)
+
+            # Classification loss
+            class_loss = class_criterion(class_logit, labels)
+
+            # Combined loss
+            loss = recon_loss + classification_lambda * class_loss
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+            optimizer.step()
+
+            batch_size = len(features)
+            train_loss_total += loss.item() * batch_size
+            train_recon_total += recon_loss.item() * batch_size
+            train_class_total += class_loss.item() * batch_size
+            num_samples += batch_size
+
+            # Track per-class reconstruction error
+            fraud_mask = labels == 1
+            legit_mask = labels == 0
+
+            if fraud_mask.sum() > 0:
+                with torch.no_grad():
+                    fraud_loss = recon_criterion(
+                        reconstructed[fraud_mask],
+                        features[fraud_mask]
+                    )
+                    train_loss_fraud += fraud_loss.item() * fraud_mask.sum().item()
+                    num_fraud += fraud_mask.sum().item()
+
+            if legit_mask.sum() > 0:
+                with torch.no_grad():
+                    legit_loss = recon_criterion(
+                        reconstructed[legit_mask],
+                        features[legit_mask]
+                    )
+                    train_loss_legit += legit_loss.item() * legit_mask.sum().item()
+                    num_legit += legit_mask.sum().item()
+
+        # Compute epoch averages
+        train_loss = train_loss_total / num_samples
+        train_recon = train_recon_total / num_samples
+        train_class = train_class_total / num_samples
+        fraud_loss_avg = train_loss_fraud / num_fraud if num_fraud > 0 else 0
+        legit_loss_avg = train_loss_legit / num_legit if num_legit > 0 else 0
+
+        # Validation
+        val_loss = evaluate_autoencoder(model.autoencoder, val_loader, device, recon_criterion)
+
+        # Record history
+        history['train_loss'].append(train_loss)
+        history['train_recon_loss'].append(train_recon)
+        history['train_class_loss'].append(train_class)
+        history['val_loss'].append(val_loss)
+        history['train_loss_fraud'].append(fraud_loss_avg)
+        history['train_loss_legitimate'].append(legit_loss_avg)
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_model_state = model.state_dict().copy()
+            history['best_epoch'] = epoch
+
+        logger.info(
+            f"Epoch {epoch + 1:3d}/{config.epochs} | "
+            f"Loss: {train_loss:.6f} (R:{train_recon:.6f} C:{train_class:.4f}) | "
+            f"Val: {val_loss:.6f}"
+        )
+
+        if early_stopping.step(val_loss):
+            logger.info(f"\nEarly stopping triggered at epoch {epoch + 1}")
+            break
+
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
+        logger.info(f"\nRestored best model from epoch {history['best_epoch'] + 1}")
+
+    logger.info("=" * 80)
+    logger.info("Training complete!")
+    logger.info("=" * 80)
+
+    return model, history
+
+
 def save_autoencoder_artifacts(
     output_dir: str,
     model: FeedforwardAutoencoder,
@@ -373,7 +667,7 @@ def main():
     parser.add_argument(
         "--hidden-dim",
         type=int,
-        default=25,
+        default=22,
         help="Hidden layer dimension d1 (intermediate size)"
     )
     parser.add_argument(
@@ -387,6 +681,35 @@ def main():
         type=float,
         default=0.0,
         help="Dropout rate (0 = no dropout)"
+    )
+
+    # Preprocessing arguments
+    parser.add_argument(
+        "--no-log-transform",
+        action="store_true",
+        help="Disable log transform on Amount (normalize raw Amount to [-1,1] instead)"
+    )
+    parser.add_argument(
+        "--no-validation-split",
+        action="store_true",
+        help="Use full 70%% for training (no validation split, fixed epochs)"
+    )
+    parser.add_argument(
+        "--fixed-epochs",
+        type=int,
+        default=50,
+        help="Number of epochs when training without validation (default: 50)"
+    )
+    parser.add_argument(
+        "--semi-supervised",
+        action="store_true",
+        help="Use semi-supervised training with classification loss on latent representation"
+    )
+    parser.add_argument(
+        "--classification-lambda",
+        type=float,
+        default=0.01,
+        help="Weight for classification loss in semi-supervised training (default: 0.01)"
     )
 
     # Training arguments
@@ -440,8 +763,21 @@ def main():
     logger.info("Step 1: Preprocessing Data")
     logger.info("=" * 80)
 
-    preprocessor_config = CreditCardPreprocessorConfig()
+    # Semi-supervised requires validation split for early stopping
+    use_validation = not args.no_validation_split or args.semi_supervised
+    if args.semi_supervised and args.no_validation_split:
+        logger.warning("Semi-supervised training requires validation split. Ignoring --no-validation-split.")
+
+    preprocessor_config = CreditCardPreprocessorConfig(
+        log_transform_amount=not args.no_log_transform,
+        use_validation_split=use_validation
+    )
     preprocessor = CreditCardPreprocessor(config=preprocessor_config)
+
+    if args.no_log_transform:
+        logger.info("Log transform DISABLED - normalizing raw Amount to [-1,1]")
+    if args.no_validation_split and not args.semi_supervised:
+        logger.info("Validation split DISABLED - using full 70% for training")
 
     dataloaders, normalized_splits = preprocessor.preprocess(
         filepath=args.data_path,
@@ -460,7 +796,14 @@ def main():
         dropout=args.dropout
     )
 
-    model = FeedforwardAutoencoder(config=autoencoder_config)
+    base_autoencoder = FeedforwardAutoencoder(config=autoencoder_config)
+
+    if args.semi_supervised:
+        logger.info("Using SEMI-SUPERVISED training with classification loss")
+        model = SemiSupervisedAutoencoder(base_autoencoder)
+    else:
+        model = base_autoencoder
+
     model.to(device)
 
     # ===== Step 3: Train Model =====
@@ -475,13 +818,36 @@ def main():
         patience=args.patience
     )
 
-    model, history = train_autoencoder(
-        model=model,
-        train_loader=dataloaders['train'],
-        val_loader=dataloaders['val'],
-        device=device,
-        config=training_config
-    )
+    if args.semi_supervised:
+        # Semi-supervised training with classification loss
+        model, history = train_semi_supervised_autoencoder(
+            model=model,
+            train_loader=dataloaders['train'],
+            val_loader=dataloaders['val'],
+            device=device,
+            config=training_config,
+            classification_lambda=args.classification_lambda
+        )
+        # Extract base autoencoder for saving
+        model = model.autoencoder
+    elif args.no_validation_split:
+        # Train for fixed epochs without validation (matches paper)
+        model, history = train_autoencoder_fixed_epochs(
+            model=model,
+            train_loader=dataloaders['train'],
+            device=device,
+            config=training_config,
+            fixed_epochs=args.fixed_epochs
+        )
+    else:
+        # Train with validation and early stopping
+        model, history = train_autoencoder(
+            model=model,
+            train_loader=dataloaders['train'],
+            val_loader=dataloaders['val'],
+            device=device,
+            config=training_config
+        )
 
     # ===== Step 4: Evaluate on Test Set =====
     logger.info("\n" + "=" * 80)
@@ -510,7 +876,10 @@ def main():
     logger.info("=" * 80)
     logger.info(f"Total epochs: {len(history['train_loss'])}")
     logger.info(f"Best epoch: {history['best_epoch'] + 1}")
-    logger.info(f"Best validation loss: {min(history['val_loss']):.6f}")
+    if history['val_loss']:
+        logger.info(f"Best validation loss: {min(history['val_loss']):.6f}")
+    else:
+        logger.info("No validation (trained for fixed epochs)")
     logger.info(f"Final test loss: {test_loss:.6f}")
     logger.info(f"Model saved to: {args.output_dir}")
     logger.info("=" * 80)

@@ -97,6 +97,55 @@ def extract_latent_features(
     return latent_features, labels
 
 
+def extract_recon_error_features(
+    autoencoder: nn.Module,
+    dataloader: DataLoader,
+    device: torch.device
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Extract original features with appended reconstruction error.
+
+    Instead of using latent features (15 dims), this uses original features (30 dims)
+    plus the scalar reconstruction error, giving 31 features total.
+
+    This approach cannot do worse than using original features alone since the
+    autoencoder ADDS information rather than replacing it.
+
+    Args:
+        autoencoder: Trained autoencoder (full model, not just encoder)
+        dataloader: DataLoader with (features, labels)
+        device: cpu/cuda
+
+    Returns:
+        (features_with_recon_error, labels) as numpy arrays
+        features_with_recon_error shape: (N, 31)
+    """
+    autoencoder.eval()
+    all_features = []
+    all_labels = []
+
+    with torch.no_grad():
+        for features, labels in dataloader:
+            features = features.to(device)
+
+            # Get reconstruction
+            reconstructed = autoencoder(features)
+
+            # Compute per-sample reconstruction error (L2 norm)
+            recon_error = torch.norm(features - reconstructed, dim=1, keepdim=True)
+
+            # Concatenate: [original features (30), recon_error (1)] = 31 features
+            features_with_error = torch.cat([features, recon_error], dim=1)
+
+            all_features.append(features_with_error.cpu().numpy())
+            all_labels.append(labels.numpy())
+
+    combined_features = np.vstack(all_features)
+    labels = np.concatenate(all_labels)
+
+    return combined_features, labels
+
+
 def train_classifier(
     model: MLPClassifier,
     train_loader: DataLoader,
@@ -314,6 +363,125 @@ def evaluate_classifier(
     return avg_loss, precision, recall, f1
 
 
+def train_classifier_fixed_epochs(
+    model: MLPClassifier,
+    train_loader: DataLoader,
+    device: torch.device,
+    config: ClassifierTrainingConfig,
+    fixed_epochs: int = 50
+) -> Tuple[MLPClassifier, Dict]:
+    """
+    Train MLP classifier for fixed epochs without validation (matches paper's setup).
+
+    No early stopping - trains for exactly 'fixed_epochs' epochs.
+
+    Args:
+        model: MLPClassifier to train
+        train_loader: Training DataLoader (full 70% of data)
+        device: cpu/cuda
+        config: Training configuration
+        fixed_epochs: Number of epochs to train
+
+    Returns:
+        (trained_model, history)
+    """
+    logger.info("=" * 80)
+    logger.info("Training MLP Classifier (FIXED EPOCHS - NO VALIDATION)")
+    logger.info("=" * 80)
+    logger.info(f"Device: {device}")
+    logger.info(f"Fixed epochs: {fixed_epochs}")
+    logger.info(f"Learning rate: {config.learning_rate}")
+    logger.info(f"Fraud class weight: {config.class_weight_fraud}")
+    logger.info("NO early stopping - training for fixed epochs")
+    logger.info("=" * 80)
+
+    # Loss with class weighting
+    if config.class_weight_fraud != 1.0:
+        criterion = nn.BCELoss(reduction='none')
+        use_class_weight = True
+    else:
+        criterion = nn.BCELoss()
+        use_class_weight = False
+
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=config.learning_rate,
+        weight_decay=config.weight_decay
+    )
+
+    # Training history
+    history = {
+        'train_loss': [],
+        'val_loss': [],  # Empty, kept for compatibility
+        'train_precision': [],
+        'train_recall': [],
+        'train_f1': [],
+        'val_precision': [],
+        'val_recall': [],
+        'val_f1': [],
+        'best_epoch': fixed_epochs - 1
+    }
+
+    # Training loop
+    for epoch in range(fixed_epochs):
+        model.train()
+        train_loss = 0.0
+        all_preds = []
+        all_labels = []
+
+        for latent, labels in train_loader:
+            latent, labels = latent.to(device), labels.to(device)
+
+            optimizer.zero_grad()
+
+            # Forward pass
+            probs = model(latent).squeeze()
+
+            # Compute loss
+            if use_class_weight:
+                weights = torch.ones_like(labels)
+                weights[labels == 1] = config.class_weight_fraud
+                loss = (criterion(probs, labels) * weights).mean()
+            else:
+                loss = criterion(probs, labels)
+
+            # Backward pass
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+            optimizer.step()
+
+            # Track metrics
+            train_loss += loss.item() * len(latent)
+            preds = (probs.detach() >= 0.5).cpu().numpy()
+            all_preds.extend(preds)
+            all_labels.extend(labels.cpu().numpy())
+
+        # Compute epoch metrics
+        train_loss /= len(train_loader.dataset)
+        train_precision = precision_score(all_labels, all_preds, zero_division=0)
+        train_recall = recall_score(all_labels, all_preds, zero_division=0)
+        train_f1 = f1_score(all_labels, all_preds, zero_division=0)
+
+        # Record history
+        history['train_loss'].append(train_loss)
+        history['train_precision'].append(train_precision)
+        history['train_recall'].append(train_recall)
+        history['train_f1'].append(train_f1)
+
+        # Log progress (no validation)
+        logger.info(
+            f"Epoch {epoch + 1:3d}/{fixed_epochs} | "
+            f"Train Loss: {train_loss:.6f} | "
+            f"P/R/F1: {train_precision:.4f}/{train_recall:.4f}/{train_f1:.4f}"
+        )
+
+    logger.info("=" * 80)
+    logger.info(f"Training complete! Trained for {fixed_epochs} epochs.")
+    logger.info("=" * 80)
+
+    return model, history
+
+
 def evaluate_detailed(
     model: MLPClassifier,
     dataloader: DataLoader,
@@ -413,6 +581,34 @@ def main():
         help="Path to fitted scaler"
     )
 
+    # Preprocessing arguments
+    parser.add_argument(
+        "--no-log-transform",
+        action="store_true",
+        help="Disable log transform on Amount (must match autoencoder training)"
+    )
+    parser.add_argument(
+        "--use-recon-error",
+        action="store_true",
+        help="Use original features + reconstruction error (31 dims) instead of latent features (15 dims)"
+    )
+    parser.add_argument(
+        "--raw-features",
+        action="store_true",
+        help="Use raw 30 features directly (M2 model - no autoencoder needed)"
+    )
+    parser.add_argument(
+        "--no-validation-split",
+        action="store_true",
+        help="Use full 70%% for training (no validation split, fixed epochs)"
+    )
+    parser.add_argument(
+        "--fixed-epochs",
+        type=int,
+        default=75,
+        help="Number of epochs when training without validation (default: 50)"
+    )
+
     # Training arguments
     parser.add_argument(
         "--epochs",
@@ -423,7 +619,7 @@ def main():
     parser.add_argument(
         "--learning-rate",
         type=float,
-        default=1e-3,
+        default=1e-4,
         help="Learning rate"
     )
     parser.add_argument(
@@ -446,6 +642,12 @@ def main():
         default="models/credit_card",
         help="Directory to save trained classifier"
     )
+    parser.add_argument(
+        "--output-suffix",
+        type=str,
+        default="",
+        help="Suffix for output files (e.g., '_m2' for mlp_classifier_m2.pt)"
+    )
 
     args = parser.parse_args()
 
@@ -464,64 +666,111 @@ def main():
     logger.info("Step 1: Preprocessing Data")
     logger.info("=" * 80)
 
-    preprocessor_config = CreditCardPreprocessorConfig()
+    preprocessor_config = CreditCardPreprocessorConfig(
+        log_transform_amount=not args.no_log_transform,
+        use_validation_split=not args.no_validation_split
+    )
     preprocessor = CreditCardPreprocessor(config=preprocessor_config)
+
+    if args.no_log_transform:
+        logger.info("Log transform DISABLED - using raw Amount normalized to [-1,1]")
+    if args.no_validation_split:
+        logger.info("Validation split DISABLED - using full 70% for training")
 
     dataloaders, normalized_splits = preprocessor.preprocess(
         filepath=args.data_path,
         batch_size=args.batch_size
     )
 
-    # ===== Step 2: Load Trained Autoencoder =====
-    logger.info("\n" + "=" * 80)
-    logger.info("Step 2: Loading Trained Autoencoder")
-    logger.info("=" * 80)
+    # Determine which splits to process
+    split_names = ['train', 'test'] if args.no_validation_split else ['train', 'val', 'test']
 
-    # Enable safe loading
-    torch.serialization.add_safe_globals([AutoencoderConfig])
+    # ===== Step 2: Prepare Features =====
+    if args.raw_features:
+        # M2 model: Use raw features directly, no autoencoder needed
+        logger.info("\n" + "=" * 80)
+        logger.info("Step 2: Using Raw Features (M2 model - no autoencoder)")
+        logger.info("=" * 80)
 
-    checkpoint = torch.load(args.autoencoder_path, map_location=device, weights_only=True)
-    autoencoder = FeedforwardAutoencoder(config=checkpoint['model_config'])
-    autoencoder.load_state_dict(checkpoint['model_state_dict'])
-    autoencoder.to(device)
-    autoencoder.eval()
+        extracted_features = {}
+        labels = {}
+        for split_name in split_names:
+            X, y = normalized_splits[split_name]
+            extracted_features[split_name] = X
+            labels[split_name] = y
+            logger.info(f"  {split_name}: {X.shape[0]:,} samples, shape {X.shape}")
 
-    logger.info(f"Loaded autoencoder from {args.autoencoder_path}")
-    logger.info(f"  Parameters: {autoencoder.count_parameters():,}")
+        input_dim = extracted_features['train'].shape[1]
+        logger.info(f"MLP input dimension: {input_dim}")
+        autoencoder = None  # No autoencoder for raw features
 
-    # Freeze encoder
-    for param in autoencoder.encoder.parameters():
-        param.requires_grad = False
-    logger.info("✓ Encoder frozen")
+    else:
+        # Load autoencoder and extract features
+        logger.info("\n" + "=" * 80)
+        logger.info("Step 2: Loading Trained Autoencoder")
+        logger.info("=" * 80)
 
-    # ===== Step 3: Extract Latent Features =====
-    logger.info("\n" + "=" * 80)
-    logger.info("Step 3: Extracting Latent Features")
-    logger.info("=" * 80)
+        # Enable safe loading
+        torch.serialization.add_safe_globals([AutoencoderConfig])
 
-    latent_features = {}
-    labels = {}
+        checkpoint = torch.load(args.autoencoder_path, map_location=device, weights_only=True)
+        autoencoder = FeedforwardAutoencoder(config=checkpoint['model_config'])
+        autoencoder.load_state_dict(checkpoint['model_state_dict'])
+        autoencoder.to(device)
+        autoencoder.eval()
 
-    for split_name in ['train', 'val', 'test']:
-        logger.info(f"Extracting {split_name} features...")
-        latent, lbls = extract_latent_features(
-            autoencoder.encoder,
-            dataloaders[split_name],
-            device
-        )
-        latent_features[split_name] = latent
-        labels[split_name] = lbls
-        logger.info(f"  {split_name}: {latent.shape[0]:,} samples, shape {latent.shape}")
+        logger.info(f"Loaded autoencoder from {args.autoencoder_path}")
+        logger.info(f"  Parameters: {autoencoder.count_parameters():,}")
 
-    # Create new DataLoaders with latent features
-    latent_dataloaders = {}
-    for split_name in ['train', 'val', 'test']:
+        # Freeze encoder
+        for param in autoencoder.encoder.parameters():
+            param.requires_grad = False
+        logger.info("Encoder frozen")
+
+        # ===== Step 3: Extract Features =====
+        logger.info("\n" + "=" * 80)
+        if args.use_recon_error:
+            logger.info("Step 3: Extracting Original Features + Reconstruction Error (31 dims)")
+        else:
+            logger.info("Step 3: Extracting Latent Features (15 dims)")
+        logger.info("=" * 80)
+
+        extracted_features = {}
+        labels = {}
+
+        for split_name in split_names:
+            logger.info(f"Extracting {split_name} features...")
+            if args.use_recon_error:
+                # Use original features + reconstruction error (31 dims)
+                feats, lbls = extract_recon_error_features(
+                    autoencoder,  # Full autoencoder, not just encoder
+                    dataloaders[split_name],
+                    device
+                )
+            else:
+                # Use latent features (15 dims)
+                feats, lbls = extract_latent_features(
+                    autoencoder.encoder,
+                    dataloaders[split_name],
+                    device
+                )
+            extracted_features[split_name] = feats
+            labels[split_name] = lbls
+            logger.info(f"  {split_name}: {feats.shape[0]:,} samples, shape {feats.shape}")
+
+        # Determine input dimension based on feature extraction method
+        input_dim = extracted_features['train'].shape[1]
+        logger.info(f"MLP input dimension: {input_dim}")
+
+    # Create new DataLoaders with extracted features
+    feature_dataloaders = {}
+    for split_name in split_names:
         dataset = TensorDataset(
-            torch.FloatTensor(latent_features[split_name]),
+            torch.FloatTensor(extracted_features[split_name]),
             torch.FloatTensor(labels[split_name])
         )
         shuffle = (split_name == 'train')
-        latent_dataloaders[split_name] = DataLoader(
+        feature_dataloaders[split_name] = DataLoader(
             dataset,
             batch_size=args.batch_size,
             shuffle=shuffle
@@ -532,11 +781,28 @@ def main():
     logger.info("Step 4: Training MLP Classifier")
     logger.info("=" * 80)
 
-    mlp_config = MLPConfig(
-        input_dim=15,
-        hidden_dim1=13,
-        hidden_dim2=7
-    )
+    # Adjust MLP architecture based on input dimension
+    if args.raw_features:
+        # 30 input features (raw): M2 model architecture
+        mlp_config = MLPConfig(
+            input_dim=30,
+            hidden_dim1=22,  # Scaled for 30 inputs
+            hidden_dim2=12
+        )
+    elif args.use_recon_error:
+        # 31 input features: scale hidden layers proportionally
+        mlp_config = MLPConfig(
+            input_dim=31,
+            hidden_dim1=20,  # Scaled up from 13
+            hidden_dim2=10   # Scaled up from 7
+        )
+    else:
+        # 15 input features (latent)
+        mlp_config = MLPConfig(
+            input_dim=15,
+            hidden_dim1=13,
+            hidden_dim2=7
+        )
     classifier = MLPClassifier(config=mlp_config)
     classifier.to(device)
 
@@ -547,13 +813,24 @@ def main():
         class_weight_fraud=args.class_weight_fraud
     )
 
-    classifier, history = train_classifier(
-        model=classifier,
-        train_loader=latent_dataloaders['train'],
-        val_loader=latent_dataloaders['val'],
-        device=device,
-        config=training_config
-    )
+    if args.no_validation_split:
+        # Train for fixed epochs without validation (matches paper)
+        classifier, history = train_classifier_fixed_epochs(
+            model=classifier,
+            train_loader=feature_dataloaders['train'],
+            device=device,
+            config=training_config,
+            fixed_epochs=args.fixed_epochs
+        )
+    else:
+        # Train with validation and early stopping
+        classifier, history = train_classifier(
+            model=classifier,
+            train_loader=feature_dataloaders['train'],
+            val_loader=feature_dataloaders['val'],
+            device=device,
+            config=training_config
+        )
 
     # ===== Step 5: Evaluate on Test Set =====
     logger.info("\n" + "=" * 80)
@@ -562,7 +839,7 @@ def main():
 
     test_results = evaluate_detailed(
         classifier,
-        latent_dataloaders['test'],
+        feature_dataloaders['test'],
         device,
         split_name="Test"
     )
@@ -575,8 +852,10 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    suffix = args.output_suffix
+
     # Save classifier
-    classifier_path = output_dir / "mlp_classifier.pt"
+    classifier_path = output_dir / f"mlp_classifier{suffix}.pt"
     torch.save({
         'model_state_dict': classifier.state_dict(),
         'model_config': classifier.config,
@@ -584,13 +863,13 @@ def main():
     logger.info(f"Saved classifier to {classifier_path}")
 
     # Save training history
-    history_path = output_dir / "mlp_training_history.pkl"
+    history_path = output_dir / f"mlp_training_history{suffix}.pkl"
     with open(history_path, 'wb') as f:
         pickle.dump(history, f)
     logger.info(f"Saved training history to {history_path}")
 
     # Save test results
-    results_path = output_dir / "test_results.pkl"
+    results_path = output_dir / f"test_results{suffix}.pkl"
     with open(results_path, 'wb') as f:
         pickle.dump(test_results, f)
     logger.info(f"Saved test results to {results_path}")
@@ -599,17 +878,27 @@ def main():
     logger.info("\n" + "=" * 80)
     logger.info("Training Summary")
     logger.info("=" * 80)
-    logger.info(f"Autoencoder: {autoencoder.count_parameters():,} params")
-    logger.info(f"Classifier: {classifier.count_parameters():,} params")
-    logger.info(f"Total M1 model: {autoencoder.count_parameters() + classifier.count_parameters():,} params")
+    if autoencoder is not None:
+        logger.info(f"Autoencoder: {autoencoder.count_parameters():,} params")
+        logger.info(f"Classifier: {classifier.count_parameters():,} params")
+        logger.info(f"Total M1 model: {autoencoder.count_parameters() + classifier.count_parameters():,} params")
+    else:
+        logger.info(f"Model type: M2 (raw features, no autoencoder)")
+        logger.info(f"Classifier: {classifier.count_parameters():,} params")
     logger.info(f"\nBest epoch: {history['best_epoch'] + 1}")
-    logger.info(f"Best validation F1: {max(history['val_f1']):.4f}")
+    if history['val_f1']:
+        logger.info(f"Best validation F1: {max(history['val_f1']):.4f}")
+    else:
+        logger.info("No validation (trained for fixed epochs)")
     logger.info(f"\nTest Metrics:")
     logger.info(f"  Precision: {test_results['precision']:.4f}")
     logger.info(f"  Recall: {test_results['recall']:.4f}")
     logger.info(f"  F1 Score: {test_results['f1']:.4f}")
     logger.info("=" * 80)
-    logger.info("\n✓ Phase 1 (M1 Model) complete!")
+    if autoencoder is not None:
+        logger.info("\nPhase 1 (M1 Model) complete!")
+    else:
+        logger.info("\nM2 Model (raw features) complete!")
 
 
 if __name__ == "__main__":

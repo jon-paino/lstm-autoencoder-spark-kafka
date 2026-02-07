@@ -187,6 +187,68 @@ class FeedforwardAutoencoder(nn.Module):
         return asdict(self.config)
 
 
+class SemiSupervisedAutoencoder(nn.Module):
+    """
+    Autoencoder with a classification head on the latent representation.
+
+    Adds a small linear probe to the bottleneck that predicts fraud/legitimate.
+    Training uses a combined loss:
+        L = L_reconstruction + λ * L_classification
+
+    This encourages the latent representation to preserve fraud-relevant information
+    that would otherwise be discarded by the pure reconstruction objective.
+    """
+
+    def __init__(self, autoencoder: FeedforwardAutoencoder):
+        """
+        Args:
+            autoencoder: Base autoencoder to wrap
+        """
+        super().__init__()
+        self.autoencoder = autoencoder
+        self.config = autoencoder.config
+
+        # Linear classification head on latent representation
+        self.classifier = nn.Linear(self.config.latent_dim, 1)
+
+        logger.info(f"Created SemiSupervisedAutoencoder:")
+        logger.info(f"  Base autoencoder params: {autoencoder.count_parameters():,}")
+        logger.info(f"  Classifier params: {sum(p.numel() for p in self.classifier.parameters()):,}")
+
+    def forward(self, x: torch.Tensor) -> tuple:
+        """
+        Forward pass returning both reconstruction and classification logit.
+
+        Args:
+            x: Input tensor, shape (batch, input_dim)
+
+        Returns:
+            (x_reconstructed, class_logit): Reconstruction and fraud probability logit
+        """
+        z = self.autoencoder.encoder(x)
+        x_reconstructed = self.autoencoder.decoder(z)
+        class_logit = self.classifier(z).squeeze(-1)  # (batch,)
+        return x_reconstructed, class_logit
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        """Extract latent representation."""
+        return self.autoencoder.encode(x)
+
+    @property
+    def encoder(self):
+        """Access the encoder for compatibility."""
+        return self.autoencoder.encoder
+
+    @property
+    def decoder(self):
+        """Access the decoder for compatibility."""
+        return self.autoencoder.decoder
+
+    def count_parameters(self) -> int:
+        """Count trainable parameters."""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
 def create_autoencoder(
     input_dim: int = 30,
     hidden_dim: int = 22,

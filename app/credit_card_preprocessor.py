@@ -31,6 +31,7 @@ class CreditCardPreprocessorConfig:
     random_seed: int = 42              # For reproducibility
     normalization_range: tuple = field(default_factory=lambda: (-1, 1))  # Min-max range
     log_transform_amount: bool = True  # Apply log transform to Amount
+    use_validation_split: bool = True  # Split training data into train/val
 
 
 class CreditCardDataset(Dataset):
@@ -182,13 +183,17 @@ class CreditCardPreprocessor:
         """
         Create stratified train/val/test splits.
 
-        Split strategy:
+        Split strategy (with validation):
         1. 70/30 train/test split (stratified by fraud ratio)
         2. 80/20 train/val split of training data (stratified)
 
-        Final distribution:
+        Final distribution (with validation):
         - Train: 56% of total (0.7 * 0.8)
         - Val: 14% of total (0.7 * 0.2)
+        - Test: 30% of total
+
+        Final distribution (without validation):
+        - Train: 70% of total
         - Test: 30% of total
 
         All splits preserve the ~0.172% fraud ratio.
@@ -197,7 +202,7 @@ class CreditCardPreprocessor:
             df: DataFrame with features and Class label
 
         Returns:
-            Dict with keys 'train', 'val', 'test', values (X, y) tuples
+            Dict with keys 'train', 'val' (optional), 'test', values (X, y) tuples
         """
         # Separate features and labels
         feature_cols = [col for col in df.columns if col != 'Class']
@@ -215,28 +220,45 @@ class CreditCardPreprocessor:
             random_state=self.config.random_seed
         )
 
-        # 80/20 train/val split of training data (stratified)
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_train_full, y_train_full,
-            test_size=self.config.val_ratio_of_train,
-            stratify=y_train_full,
-            random_state=self.config.random_seed
-        )
+        if self.config.use_validation_split:
+            # 80/20 train/val split of training data (stratified)
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_train_full, y_train_full,
+                test_size=self.config.val_ratio_of_train,
+                stratify=y_train_full,
+                random_state=self.config.random_seed
+            )
 
-        # Log split statistics
-        logger.info(f"\nData splits created:")
-        logger.info(f"  Train: {len(X_train):,} samples ({len(X_train)/len(X)*100:.1f}%)")
-        logger.info(f"    Fraud: {(y_train == 1).sum():,} ({(y_train == 1).mean()*100:.3f}%)")
-        logger.info(f"  Val: {len(X_val):,} samples ({len(X_val)/len(X)*100:.1f}%)")
-        logger.info(f"    Fraud: {(y_val == 1).sum():,} ({(y_val == 1).mean()*100:.3f}%)")
-        logger.info(f"  Test: {len(X_test):,} samples ({len(X_test)/len(X)*100:.1f}%)")
-        logger.info(f"    Fraud: {(y_test == 1).sum():,} ({(y_test == 1).mean()*100:.3f}%)")
+            # Log split statistics
+            logger.info(f"\nData splits created (with validation):")
+            logger.info(f"  Train: {len(X_train):,} samples ({len(X_train)/len(X)*100:.1f}%)")
+            logger.info(f"    Fraud: {(y_train == 1).sum():,} ({(y_train == 1).mean()*100:.3f}%)")
+            logger.info(f"  Val: {len(X_val):,} samples ({len(X_val)/len(X)*100:.1f}%)")
+            logger.info(f"    Fraud: {(y_val == 1).sum():,} ({(y_val == 1).mean()*100:.3f}%)")
+            logger.info(f"  Test: {len(X_test):,} samples ({len(X_test)/len(X)*100:.1f}%)")
+            logger.info(f"    Fraud: {(y_test == 1).sum():,} ({(y_test == 1).mean()*100:.3f}%)")
 
-        return {
-            'train': (X_train, y_train),
-            'val': (X_val, y_val),
-            'test': (X_test, y_test)
-        }
+            return {
+                'train': (X_train, y_train),
+                'val': (X_val, y_val),
+                'test': (X_test, y_test)
+            }
+        else:
+            # Use full 70% for training (no validation split)
+            X_train = X_train_full
+            y_train = y_train_full
+
+            # Log split statistics
+            logger.info(f"\nData splits created (NO validation - full 70% for training):")
+            logger.info(f"  Train: {len(X_train):,} samples ({len(X_train)/len(X)*100:.1f}%)")
+            logger.info(f"    Fraud: {(y_train == 1).sum():,} ({(y_train == 1).mean()*100:.3f}%)")
+            logger.info(f"  Test: {len(X_test):,} samples ({len(X_test)/len(X)*100:.1f}%)")
+            logger.info(f"    Fraud: {(y_test == 1).sum():,} ({(y_test == 1).mean()*100:.3f}%)")
+
+            return {
+                'train': (X_train, y_train),
+                'test': (X_test, y_test)
+            }
 
     def normalize(
         self,
