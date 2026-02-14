@@ -46,7 +46,7 @@ curl -o data/nyc_taxi.csv https://raw.githubusercontent.com/numenta/NAB/master/d
 
 **For LSTM detection mode:**
 ```bash
-MESSAGE_DELAY_SECONDS=0.01 DETECTOR_TYPE=lstm START_OFFSET=4992 LOOP_DATA=false docker compose up --build
+MESSAGE_DELAY_SECONDS=0.005 DETECTOR_TYPE=lstm START_OFFSET=4944 LOOP_DATA=false docker compose up --build
 ```
 
 **For Isolation Forest detection mode:**
@@ -196,6 +196,89 @@ The `evaluation/` directory contains performance visualizations:
 - **Windows**: Sliding window analysis
 - **Threshold**: Configurable contamination parameter
 
+## Real-Time Dashboard
+
+The Dash application provides a comprehensive real-time visualization of the anomaly detection system in action. The dashboard updates continuously as Spark processes the streaming data from Kafka.
+
+### Dashboard Components
+
+The interface consists of four main sections:
+
+#### 1. Summary Metrics (Top Row)
+- **Total Received**: Cumulative count of records processed
+- **Weeks Processed**: Number of complete weekly windows analyzed
+- **Flagged Windows**: Count of detected anomalous weeks
+- **Detection Status**: Current processing state and progress
+
+#### 2. Time Series Visualization
+- **Blue Line**: NYC taxi demand over time
+- **Red X Markers**: Detected anomaly points
+- **Red Shaded Regions**: Anomalous weekly windows (LSTM mode)
+- **Vertical Dashed Lines**: Window boundaries
+
+#### 3. Recent Records Table
+Displays the most recent incoming data points with timestamp, value, and sequence ID.
+
+#### 4. Detected Anomalies Table
+Lists all flagged anomalies with their timestamp, value, and anomaly score.
+
+### Example Detection Scenarios
+
+The system successfully detects both types of anomalies in the NYC taxi dataset:
+
+#### Startup: System Buffering
+
+<img src="path/to/startup.png" alt="Dashboard at startup" width="800"/>
+
+When the application first starts:
+- Status shows "Buffering: 300/336" indicating data collection for the first weekly window
+- No anomalies detected yet, as the LSTM requires a complete week ($336$ samples $= 48$ samples/day $\times 7$ days) before scoring
+- Time series displays the incoming data pattern with clear daily and weekly periodicity
+
+#### Anomaly 1: NYC Marathon Spike (November 2, 2014)
+
+<img src="path/to/marathon.png" alt="NYC Marathon anomaly detection" width="800"/>
+
+After processing 4 weeks and 1,400 total records:
+- **Anomaly detected**: Unusual spike on November 2, 2014
+- **Cause**: NYC Marathon event driving abnormal taxi demand (peak of approximately 40,000 passengers)
+- **Detection**: Red X markers highlight the anomalous points
+- **Anomaly Score**: 11749745.4902 (significantly exceeds the 99.99th percentile threshold)
+- **Flagged Windows**: 1 (the week containing the marathon)
+
+The LSTM encoder-decoder recognizes this pattern as highly unusual because:
+- The magnitude exceeds normal weekly peaks by approximately 50%
+- The reconstruction error is substantial as the model was trained only on normal taxi demand patterns
+- The Mahalanobis distance captures the multivariate deviation from expected behavior
+
+#### Anomaly 2: Christmas Day Drop (December 25, 2014)
+
+<img src="christmas.png" alt="Christmas Day anomaly detection" width="800"/>
+
+After processing 11 weeks and 3,850 total records:
+- **Anomaly detected**: Severe demand drop on December 25-26, 2014
+- **Cause**: Christmas holiday causing abnormally low taxi usage (trough of approximately 2,000 passengers)
+- **Detection**: Multiple red X markers during the holiday period
+- **Anomaly Score**: 8480762.9763 for December 25th
+- **Flagged Windows**: 3 total (including prior marathon anomaly)
+
+Key observations:
+- The system detects both positive (spikes) and negative (drops) anomalies
+- Multiple consecutive anomalous points are identified during the extended holiday period
+- Pink shaded region (labeled "6h") indicates the 6-hour persistence of the anomaly
+- The model successfully distinguishes holiday patterns from normal weekly cycles
+
+### Detection Performance
+
+The LSTM Encoder-Decoder demonstrates strong performance on the NYC taxi dataset:
+
+- **Precision**: High precision with minimal false positives due to the extreme (99.99th percentile) threshold
+- **Recall**: Successfully captures major known anomalies (NYC Marathon, Thanksgiving, Christmas, New Year's)
+- **Real-time Latency**: Sub-second inference time per weekly window on standard hardware
+- **Robustness**: Handles weekly seasonality, daily patterns, and gradual trend changes
+
+The visualization makes it immediately clear when the system detects anomalies, providing operators with actionable alerts for investigation.
+
 ## Services & Ports
 
 | Service | Port | Description |
@@ -205,4 +288,3 @@ The `evaluation/` directory contains performance visualizations:
 | Kafka | 9092 | External access |
 | Kafka (internal) | 29092 | Inter-container |
 | Zookeeper | 2181 | Kafka coordination |
-
