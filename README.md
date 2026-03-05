@@ -2,6 +2,26 @@
 
 Real-time anomaly detection on NYC taxi demand data using Kafka streaming, Spark Structured Streaming, and a Dash visualization dashboard. Supports two detection modes: **LSTM Encoder-Decoder** and **Isolation Forest**.
 
+---
+
+## Table of Contents
+
+- [Architecture Overview](#architecture-overview)
+- [Prerequisites](#prerequisites)
+- [Quick Start (Docker)](#quick-start-docker)
+- [Configuration](#configuration)
+- [Project Structure](#project-structure)
+- [Detection Modes](#detection-modes)
+  - [LSTM Encoder-Decoder (EncDec-AD)](#lstm-encoder-decoder-encdec-ad)
+  - [Isolation Forest](#isolation-forest)
+- [Real-Time Dashboard](#real-time-dashboard)
+  - [Dashboard Components](#dashboard-components)
+  - [Example Detection Scenarios](#example-detection-scenarios)
+  - [Detection Performance](#detection-performance)
+- [Services & Ports](#services--ports)
+
+---
+
 ## Architecture Overview
 
 ```
