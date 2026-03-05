@@ -8,7 +8,7 @@ Generates per-combo visualizations for FCVAE model evaluation:
 4. Training loss curves
 
 Usage:
-    python -m app.evaluate_fcvae --model-dir models/transactions_fcvae --output-dir plots/fcvae
+    python -m app.evaluate_fcvae --model-dir models/transactions_fcvae --output-dir results/fcvae
 """
 
 import argparse
@@ -863,7 +863,7 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="plots/fcvae",
+        default="results/fcvae",
         help="Directory to save plots"
     )
     parser.add_argument(
@@ -1628,7 +1628,7 @@ def run_detailed_evaluation():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="plots/fcvae_60",
+        default="results/fcvae_60",
         help="Directory to save plots"
     )
     parser.add_argument(

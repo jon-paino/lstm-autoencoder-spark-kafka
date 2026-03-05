@@ -181,7 +181,7 @@ The `models/` directory contains:
 
 #### Evaluation Results
 
-The `evaluation/` directory contains performance visualizations:
+The `results/` directory contains performance visualizations:
 
 - `training_history.png` - Training and validation loss curves
 - `score_distribution.png` - Anomaly score distributions (train vs test)

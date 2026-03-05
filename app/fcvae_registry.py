@@ -529,7 +529,7 @@ class FCVAERegistry:
             from app.evaluate_fcvae import plot_anomaly_reconstruction
             from pathlib import Path
 
-            output_path = Path("plots/fcvae")
+            output_path = Path("results/fcvae")
             output_path.mkdir(parents=True, exist_ok=True)
 
             combo_name = f"{combo[0]}_{combo[1]}"

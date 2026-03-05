@@ -225,7 +225,7 @@ data/creditcard.csv
 data/synthetic_transactions.csv
 data/generate_transactions.py
 models/transactions/
-evaluation/fiserv
+results/fiserv
 additions.md
 changes.md
 FCVAE/
@@ -236,6 +236,8 @@ models/credit_card_fix1_2_4
 models/transactions_fcvae
 models/transactions_fcvae_60
 FCVAE/
-plots/
+results/
 data/synthetic_transactions_v2_with_anomalies.csv
 data/synthetic_transactions_v2_split60.csv
+evaluation/fiserv/*
+plots/*

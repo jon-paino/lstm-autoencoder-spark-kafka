@@ -8,7 +8,7 @@ Usage:
     python -m app.plot_decision_logic_fps \
         --model-dir models/fcvae_60_kl \
         --data-path data/synthetic_transactions_v2_split60.csv \
-        --output-dir plots/fcvae_60_kl/false_positives_severity_0.5 \
+        --output-dir results/fcvae_60_kl/false_positives_severity_0.5 \
         --decision-mode severity_0.5 \
         --max-per-combo 3
 """
@@ -175,7 +175,7 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="plots/fcvae_60_kl/false_positives_severity_0.5",
+        default="results/fcvae_60_kl/false_positives_severity_0.5",
         help="Directory to save FP plots"
     )
     parser.add_argument(

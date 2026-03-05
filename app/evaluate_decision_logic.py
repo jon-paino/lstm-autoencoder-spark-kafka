@@ -13,7 +13,7 @@ Usage:
     python -m app.evaluate_decision_logic \
         --model-dir models/fcvae_60_kl \
         --data-path data/synthetic_transactions_v2_split60.csv \
-        --output-dir plots/fcvae_decision_logic_comparison
+        --output-dir results/fcvae_decision_logic_comparison
 """
 
 import argparse
@@ -269,7 +269,7 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="plots/fcvae_decision_logic_comparison",
+        default="results/fcvae_decision_logic_comparison",
         help="Directory to save comparison results"
     )
     parser.add_argument(
