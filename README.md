@@ -60,7 +60,11 @@ MESSAGE_DELAY_SECONDS=0.005 DETECTOR_TYPE=lstm START_OFFSET=4944 LOOP_DATA=false
 # Open the dashboard
 open http://localhost:8050
 ```
+On subsequent runs after the build, you can now use 
 
+```bash
+MESSAGE_DELAY_SECONDS=0.005 DETECTOR_TYPE=lstm START_OFFSET=4944 LOOP_DATA=false docker compose up -d
+```
 ### Dataset
 
 > **Note:** The dataset is already included in the repository at `data/nyc_taxi.csv`. **Do not run the command below** — it is only here to document how the data was originally acquired.
