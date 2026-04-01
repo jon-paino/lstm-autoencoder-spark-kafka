@@ -205,8 +205,7 @@ def save_training_artifacts(
 
 def load_model(model_path: str, device: torch.device) -> EncDecAD:
     """Load a trained model from checkpoint."""
-    torch.serialization.add_safe_globals([ModelConfig])
-    checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     model = EncDecAD(config=checkpoint["model_config"])
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)

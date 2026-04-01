@@ -73,8 +73,7 @@ def load_model_artifacts(model_path, scaler_path, scorer_path, device=None):
 
     # Load model
     logger.info(f"Loading model from {model_path}")
-    torch.serialization.add_safe_globals([ModelConfig])
-    checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     model = EncDecAD(config=checkpoint["model_config"])
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
