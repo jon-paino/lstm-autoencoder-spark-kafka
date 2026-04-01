@@ -10,32 +10,39 @@ Based on [Malhotra et al. (2016)](https://arxiv.org/abs/1607.00148): "LSTM-based
 
 ```
 lstm-autoencoder-spark-kafka/
-├── code/                                # Numbered workflow (start here)
-│   ├── 0_bootstrap.py                   # Verify environment, data, artifacts
-│   ├── 1_data_ingest.py                 # Load dataset, display summary stats
-│   ├── 2_data_exploration.ipynb         # EDA: patterns, seasonality, motivation
-│   ├── 3_model_design.ipynb             # Architecture walkthrough, train demo
-│   ├── 4_train_model.py                 # Full training pipeline
-│   ├── 5_evaluate_model.py              # Evaluate model, generate plots
-│   ├── 6_streaming_app.py               # Real-time Dash + Spark + Kafka app
-│   └── 7_optimize.py                    # Hyperparameter + split optimization
-├── src/                                 # Reusable library code
-│   ├── model.py                         # EncDecAD architecture (Malhotra et al.)
-│   ├── scorer.py                        # Mahalanobis anomaly scoring
-│   ├── preprocess.py                    # Data loading, segmentation, splits
-│   └── synthetic.py                     # Synthetic anomaly generation
-├── producer/                            # Kafka producer service
-│   └── producer.py                      # Streams CSV data to Kafka
-├── data/nyc_taxi.csv                    # NYC taxi demand dataset (included)
-├── models/                              # Pre-trained model artifacts
-│   ├── lstm_model.pt                    # LSTM Encoder-Decoder weights
-│   ├── scaler.pkl                       # StandardScaler (train-fitted)
-│   ├── scorer.pkl                       # Anomaly scorer with threshold
-│   └── training_history.pkl             # Training loss curves
-├── Dockerfile.app                       # App container definition
-├── docker-compose.yml                   # Full stack orchestration
-├── pyproject.toml                       # Python dependencies
-└── TECHNICAL.md                         # Detailed technical reference
+│
+├── code/                                    # Numbered workflow (start here)
+│   ├── 0_bootstrap.py                       # Verify environment, data, artifacts
+│   ├── 1_data_ingest.py                     # Load dataset, display summary stats
+│   ├── 2_data_exploration.ipynb             # EDA: patterns, seasonality, motivation
+│   ├── 3_model_design.ipynb                 # Architecture walkthrough, train demo
+│   ├── 4_train_model.py                     # Full training pipeline
+│   ├── 5_evaluate_model.py                  # Evaluate model, generate plots
+│   ├── 6_streaming_app.py                   # Real-time Dash + Spark + Kafka app
+│   └── 7_optimize.py                        # Hyperparameter + split optimization
+│
+├── src/                                     # Reusable library code
+│   ├── model.py                             # EncDecAD architecture (Malhotra et al.)
+│   ├── scorer.py                            # Mahalanobis anomaly scoring
+│   ├── preprocess.py                        # Data loading, segmentation, splits
+│   └── synthetic.py                         # Synthetic anomaly generation
+│
+├── producer/                                # Kafka producer service
+│   └── producer.py                          # Streams CSV data to Kafka
+│
+├── data/
+│   └── nyc_taxi.csv                         # NYC taxi demand dataset (included)
+│
+├── models/                                  # Pre-trained model artifacts
+│   ├── lstm_model.pt                        # LSTM Encoder-Decoder weights
+│   ├── scaler.pkl                           # StandardScaler (train-fitted)
+│   ├── scorer.pkl                           # Anomaly scorer with threshold
+│   └── training_history.pkl                 # Training loss curves
+│
+├── Dockerfile.app                           # App container definition
+├── docker-compose.yml                       # Full stack orchestration
+├── pyproject.toml                           # Python dependencies
+└── TECHNICAL.md                             # Detailed technical reference
 ```
 
 ## Prerequisites
@@ -56,10 +63,10 @@ uv sync
 ### 2. Open the notebooks
 
 ```bash
-uv run jupyter notebook
+uv run jupyter notebook code/
 ```
 
-Navigate to the `code/` folder in your browser and work through the notebooks in order:
+Work through the notebooks in order:
 
 | Notebook | What you'll learn |
 |----------|-------------------|
