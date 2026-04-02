@@ -47,7 +47,11 @@ lstm-autoencoder-spark-kafka/
 
 ## Prerequisites
 
-- **Python 3.11+** with **uv** ([install uv](https://docs.astral.sh/uv/getting-started/installation/))
+- **Python 3.11+**
+- **uv** (Python package manager) — install with:
+  ```bash
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  ```
 - **Docker** and **Docker Compose** (for the streaming demo)
 
 ## Quick Start
