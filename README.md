@@ -36,9 +36,11 @@ lstm-autoencoder-spark-kafka/
 │   ├── lstm_model.pt                        # LSTM Encoder-Decoder weights
 │   ├── scaler.pkl                           # StandardScaler (train-fitted)
 │   ├── scorer.pkl                           # Anomaly scorer with threshold
-│   └── training_history.pkl                 # Training loss curves
+│   ├── training_history.pkl                 # Training loss curves
+│   └── preprocessor_config.pkl              # Data split configuration
 │
 ├── Dockerfile.app                           # App container definition
+├── Dockerfile.producer                      # Producer container definition
 ├── docker-compose.yml                       # Full stack orchestration
 ├── pyproject.toml                           # Python dependencies
 └── TECHNICAL.md                             # Detailed technical reference
