@@ -1,8 +1,8 @@
-"""Step 7: Optimization - Hyperparameter grid search and data split optimization.
+"""Step 6: Optimization - Hyperparameter grid search and data split optimization.
 
 Two modes:
-    python code/7_optimize.py --mode split
-    python code/7_optimize.py --mode hyperparams
+    python code/6_optimize.py --mode split
+    python code/6_optimize.py --mode hyperparams
 """
 
 import argparse
@@ -39,7 +39,7 @@ DEFAULT_DATA_PATH = str(PROJECT_ROOT / "data" / "nyc_taxi.csv")
 
 @dataclass
 class TrainingConfig:
-    """Mirror of code/4_train_model.py TrainingConfig."""
+    """Mirror of code/3_train_model.py TrainingConfig."""
     epochs: int = 100
     learning_rate: float = 1e-3
     patience: int = 10

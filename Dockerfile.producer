@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies for confluent-kafka and uv
+# Install system dependencies for confluent-kafka
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     librdkafka-dev \
@@ -13,12 +13,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
-# Copy pyproject.toml and install dependencies
-COPY pyproject.toml .
-RUN uv pip install --system -r pyproject.toml
+# Install only the dependencies the producer needs
+RUN uv pip install --system "pandas>=2.0.0" "confluent-kafka>=2.3.0"
 
 # Copy producer code
-COPY producer.py .
+COPY producer/producer.py .
 
 # Run the producer
 CMD ["python", "-u", "producer.py"]

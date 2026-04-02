@@ -12,14 +12,13 @@ Based on [Malhotra et al. (2016)](https://arxiv.org/abs/1607.00148): "LSTM-based
 lstm-autoencoder-spark-kafka/
 │
 ├── code/                                    # Numbered workflow (start here)
-│   ├── 0_bootstrap.py                       # Verify environment, data, artifacts
-│   ├── 1_data_ingest.py                     # Load dataset, display summary stats
-│   ├── 2_data_exploration.ipynb             # EDA: patterns, seasonality, motivation
-│   ├── 3_model_design.ipynb                 # Architecture walkthrough, train demo
-│   ├── 4_train_model.py                     # Full training pipeline
-│   ├── 5_evaluate_model.py                  # Evaluate model, generate plots
-│   ├── 6_streaming_app.py                   # Real-time Dash + Spark + Kafka app
-│   └── 7_optimize.py                        # Hyperparameter + split optimization
+│   ├── 0_verify_setup.py                    # Verify environment, data, artifacts
+│   ├── 1_data_exploration.ipynb             # EDA: patterns, seasonality, motivation
+│   ├── 2_model_design.ipynb                 # Architecture walkthrough, train demo
+│   ├── 3_train_model.py                     # Full training pipeline
+│   ├── 4_evaluate_model.py                  # Evaluate model, generate plots
+│   ├── 5_streaming_app.py                   # Real-time Dash + Spark + Kafka app
+│   └── 6_optimize.py                        # Hyperparameter + split optimization
 │
 ├── src/                                     # Reusable library code
 │   ├── model.py                             # EncDecAD architecture (Malhotra et al.)
@@ -74,8 +73,8 @@ Work through the notebooks in order:
 
 | Notebook | What you'll learn |
 |----------|-------------------|
-| **`2_data_exploration.ipynb`** | Dataset overview, periodicity analysis, why simple thresholds fail, motivation for reconstruction-based detection |
-| **`3_model_design.ipynb`** | LSTM Encoder-Decoder architecture, training demo, anomaly scoring methodology, localization |
+| **`1_data_exploration.ipynb`** | Dataset overview, periodicity analysis, why simple thresholds fail, motivation for reconstruction-based detection |
+| **`2_model_design.ipynb`** | LSTM Encoder-Decoder architecture, training demo, anomaly scoring methodology, localization |
 
 Both notebooks run cell-by-cell with no external setup beyond `uv sync`. All cells are self-contained — just press Shift+Enter through them.
 
@@ -109,16 +108,15 @@ The numbered files in `code/` tell the full story of the project:
 
 | Step | File | Purpose |
 |------|------|---------|
-| 0 | `0_bootstrap.py` | Verify environment, data, and model artifacts |
-| 1 | `1_data_ingest.py` | Load and inspect the raw dataset |
-| 2 | `2_data_exploration.ipynb` | Explore data patterns, motivate the approach |
-| 3 | `3_model_design.ipynb` | Walk through model architecture and scoring |
-| 4 | `4_train_model.py` | Full training pipeline (optional — pre-trained model included) |
-| 5 | `5_evaluate_model.py` | Evaluate model performance, generate plots |
-| 6 | `6_streaming_app.py` | Real-time streaming application (Docker entrypoint) |
-| 7 | `7_optimize.py` | Hyperparameter and split optimization (advanced) |
+| 0 | `0_verify_setup.py` | Verify environment, data, and model artifacts |
+| 1 | `1_data_exploration.ipynb` | Explore data patterns, motivate the approach |
+| 2 | `2_model_design.ipynb` | Walk through model architecture and scoring |
+| 3 | `3_train_model.py` | Full training pipeline (optional — pre-trained model included) |
+| 4 | `4_evaluate_model.py` | Evaluate model performance, generate plots |
+| 5 | `5_streaming_app.py` | Real-time streaming application (Docker entrypoint) |
+| 6 | `6_optimize.py` | Hyperparameter and split optimization (advanced) |
 
-**Start with the notebooks** (steps 2-3) to understand the project. The Python scripts (steps 4-7) are for training, evaluation, and deployment.
+**Start with the notebooks** (steps 1-2) to understand the project. The Python scripts (steps 3-6) are for training, evaluation, and deployment.
 
 ## Architecture
 

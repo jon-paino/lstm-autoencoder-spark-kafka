@@ -94,7 +94,9 @@ services:
   # The dataset starts mid-week, so record 4992 aligns with the first complete test week.
   # Producer waits for app's /health endpoint to confirm Spark is ready.
   producer:
-    build: ./producer
+    build:
+      context: .
+      dockerfile: Dockerfile.producer
     container_name: producer
     depends_on:
       kafka:

@@ -9,9 +9,9 @@ Detailed architecture and internals of the LSTM Encoder-Decoder (EncDec-AD) anom
 1. [Core Model Architecture](#1-core-model-architecture) — `src/model.py`
 2. [Scoring System](#2-scoring-system) — `src/scorer.py`
 3. [Data Preprocessing](#3-data-preprocessing) — `src/preprocess.py`
-4. [Training Pipeline](#4-training-pipeline) — `code/4_train_model.py`
-5. [Evaluation](#5-evaluation) — `code/5_evaluate_model.py`
-6. [Streaming Application](#6-streaming-application) — `code/6_streaming_app.py`
+4. [Training Pipeline](#4-training-pipeline) — `code/3_train_model.py`
+5. [Evaluation](#5-evaluation) — `code/4_evaluate_model.py`
+6. [Streaming Application](#6-streaming-application) — `code/5_streaming_app.py`
 7. [Docker Infrastructure](#7-docker-infrastructure)
 8. [Configuration Reference](#8-configuration-reference)
 
@@ -186,7 +186,7 @@ Following Malhotra et al.:
 
 ## 4. Streaming Detector
 
-Detection logic is implemented as functions in `code/6_streaming_app.py`: `load_model_artifacts()` and `detect_anomalies()`.
+Detection logic is implemented as functions in `code/5_streaming_app.py`: `load_model_artifacts()` and `detect_anomalies()`.
 
 ### 4.1 Artifact Loading
 
@@ -271,7 +271,7 @@ The model is **re-fitted on each detection cycle** using the current sliding win
 
 ## 6. Training Pipeline
 
-Implemented in `code/4_train_model.py`.
+Implemented in `code/3_train_model.py`.
 
 ### 6.1 Training Loop
 
@@ -303,7 +303,7 @@ After training, the error distribution is fitted on **validation data** (not tra
 
 ## 7. Evaluation
 
-Implemented in `code/5_evaluate_model.py`.
+Implemented in `code/4_evaluate_model.py`.
 
 ### 7.1 Metrics
 
@@ -329,7 +329,7 @@ Generated in the `results/` directory:
 
 ## 8. Streaming Pipeline
 
-Implemented in `code/6_streaming_app.py`. Orchestrates Kafka consumption, Spark processing, and Dash visualization.
+Implemented in `code/5_streaming_app.py`. Orchestrates Kafka consumption, Spark processing, and Dash visualization.
 
 ### 8.1 Data Flow
 
@@ -430,19 +430,19 @@ Defined in `docker-compose.yml`. Six services on a shared `streaming_network` br
 
 | Parameter | Value | Source |
 |-----------|-------|--------|
-| `hidden_dim` | 64 | Grid search (`code/7_optimize.py --mode hyperparams`) |
+| `hidden_dim` | 64 | Grid search (`code/6_optimize.py --mode hyperparams`) |
 | `num_layers` | 1 | Grid search |
 | `dropout` | 0.2 | Grid search |
 | `learning_rate` | 5e-4 | Grid search |
 | `threshold_percentile` | 99.99% | Grid search |
-| `train_weeks` | 8 | Split optimization (`code/7_optimize.py --mode split`) |
+| `train_weeks` | 8 | Split optimization (`code/6_optimize.py --mode split`) |
 | `val_weeks` | 2 | Split optimization |
 | `threshold_weeks` | 4 | Split optimization |
 | `hard_criterion_k` | 5 | Manual tuning |
 
 ### 10.3 Base Detector Interface
 
-Detection is implemented as functions in `code/6_streaming_app.py`:
+Detection is implemented as functions in `code/5_streaming_app.py`:
 
 | Method | Returns | Description |
 |--------|---------|-------------|

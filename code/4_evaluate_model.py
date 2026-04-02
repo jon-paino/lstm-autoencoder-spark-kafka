@@ -1,10 +1,10 @@
 """
-Step 5: Evaluate Model
+Step 4: Evaluate Model
 Load trained artifacts, evaluate on test set, generate performance plots.
 
 Usage:
-    python code/5_evaluate_model.py
-    python code/5_evaluate_model.py --no-plots
+    python code/4_evaluate_model.py
+    python code/4_evaluate_model.py --no-plots
 """
 
 import argparse

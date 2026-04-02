@@ -1,9 +1,0 @@
-[project]
-name = "kafka-producer"
-version = "0.1.0"
-description = "Kafka producer for NYC taxi data streaming"
-requires-python = ">=3.11"
-dependencies = [
-    "pandas>=2.0.0",
-    "confluent-kafka>=2.3.0",
-]

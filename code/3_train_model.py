@@ -1,11 +1,11 @@
 """
-Step 4: Train Model
+Step 3: Train Model
 Full training pipeline: preprocess -> train -> fit scorer -> save artifacts.
 
 Usage:
-    python code/4_train_model.py
-    python code/4_train_model.py --epochs 50 --lr 0.001
-    python code/4_train_model.py --use-synthetic-anomalies
+    python code/3_train_model.py
+    python code/3_train_model.py --epochs 50 --lr 0.001
+    python code/3_train_model.py --use-synthetic-anomalies
 """
 
 import argparse

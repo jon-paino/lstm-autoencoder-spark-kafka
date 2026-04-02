@@ -1,5 +1,5 @@
 """
-Step 0: Bootstrap
+Step 0: Verify Setup
 Verify environment, data, and pre-trained model artifacts.
 Run this first after cloning the repository.
 """
@@ -14,7 +14,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 def main():
     print("=" * 60)
-    print("BOOTSTRAP: Verifying environment")
+    print("VERIFY SETUP: Verifying environment")
     print("=" * 60)
 
     # Python version
@@ -58,10 +58,10 @@ def main():
             size_kb = path.stat().st_size / 1024
             print(f"  {name}: {size_kb:.1f} KB")
         else:
-            print(f"  {name}: NOT FOUND (run code/4_train_model.py to train)")
+            print(f"  {name}: NOT FOUND (run code/3_train_model.py to train)")
 
     print("\n" + "=" * 60)
-    print("Bootstrap complete")
+    print("Verify Setup complete")
     print("=" * 60)
 
 
