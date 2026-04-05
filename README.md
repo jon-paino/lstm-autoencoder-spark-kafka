@@ -30,7 +30,8 @@ lstm-autoencoder-spark-kafka/
 │   └── producer.py                          # Streams CSV data to Kafka
 │
 ├── data/
-│   └── nyc_taxi.csv                         # NYC taxi demand dataset (included)
+│   ├── nyc_taxi.csv                         # NYC taxi demand dataset (included)
+│   └── nyc_taxi_sunday_aligned.csv          # Pre-trimmed to Sunday start (for Striim)
 │
 ├── models/                                  # Pre-trained model artifacts
 │   ├── lstm_model.pt                        # LSTM Encoder-Decoder weights
@@ -39,10 +40,13 @@ lstm-autoencoder-spark-kafka/
 │   ├── training_history.pkl                 # Training loss curves
 │   └── preprocessor_config.pkl              # Data split configuration
 │
+├── striim/                                  # Striim Platform OP integration (see STRIIM_LSTMAE.md)
+│
 ├── Dockerfile.app                           # App container definition
 ├── Dockerfile.producer                      # Producer container definition
 ├── docker-compose.yml                       # Full stack orchestration
 ├── pyproject.toml                           # Python dependencies
+├── STRIIM_LSTMAE.md                         # Striim pipeline setup guide
 └── TECHNICAL.md                             # Detailed technical reference
 ```
 
