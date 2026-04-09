@@ -1,12 +1,20 @@
-# LSTM Autoencoder Anomaly Detection
+# Striim AI Prototype: LSTM Autoencoder Anomaly Detection
 
-Real-time anomaly detection on NYC taxi demand data using an LSTM Encoder-Decoder model, Kafka streaming, Spark Structured Streaming, and a Dash visualization dashboard.
+This repository contains a Striim AI Prototype for real-time time-series anomaly detection using an LSTM Encoder-Decoder model, Kafka streaming, Spark Structured Streaming, and a Dash visualization dashboard.
 
-Based on [Malhotra et al. (2016)](https://arxiv.org/abs/1607.00148): "LSTM-based Encoder-Decoder for Multi-sensor Anomaly Detection"
+The prototype shows how a reconstruction-based anomaly detection workflow can move from offline model development into a streaming application that continuously scores incoming data and surfaces anomalous behavior in a live dashboard. It uses the NYC taxi demand dataset as a concrete example of recurring seasonal structure, localized disruptions, and thresholded anomaly detection.
+
+The repository includes method-oriented notebooks for learning the approach, reusable source code for the LSTM encoder-decoder and anomaly scoring pipeline, pre-trained model artifacts for running the demo immediately, and Dockerized services for the streaming application and Kafka producer.
+
+This project accompanies a forthcoming blog post about the prototype and its design decisions: **[Blog link coming soon]**
+
+The modeling approach is based on [Malhotra et al. (2016)](https://arxiv.org/abs/1607.00148): "LSTM-based Encoder-Decoder for Multi-sensor Anomaly Detection"
 
 ---
 
-## Project Structure
+## Repository Guide
+
+The repository is organized into a small number of components that map directly to the main ways you can use this prototype.
 
 ```
 lstm-autoencoder-spark-kafka/
@@ -46,6 +54,36 @@ lstm-autoencoder-spark-kafka/
 └── TECHNICAL.md                             # Detailed technical reference
 ```
 
+The numbered files in `code/` form the main workflow for the project:
+
+| Step | File | Purpose |
+|------|------|---------|
+| 0 | `0_verify_setup.py` | Optional troubleshooting: verify environment, data, and model artifacts |
+| 1 | `1_data_exploration.ipynb` | Explore data patterns and motivate the approach |
+| 2 | `2_model_design.ipynb` | Walk through the model architecture and anomaly scoring |
+| 3 | `3_train_model.py` | Train the model from scratch |
+| 4 | `4_evaluate_model.py` | Evaluate the trained model and generate plots |
+| 5 | `5_streaming_app.py` | Run the real-time streaming application |
+| 6 | `6_optimize.py` | Run hyperparameter and split optimization experiments |
+
+If you are new to the project, start with steps 1 and 2.
+
+## How To Use This Repo
+
+You can approach this prototype in four different ways, depending on what you want to accomplish:
+
+- **Learn the methods with notebooks**  
+  Start with `code/1_data_exploration.ipynb` and `code/2_model_design.ipynb` to understand the dataset, the weekly-window framing, the LSTM encoder-decoder architecture, and the anomaly scoring methodology.
+
+- **Run the pretrained streaming demo**  
+  Use the model artifacts already included in `models/` and launch the streaming stack with Docker to see the dashboard and anomaly detection workflow in action without retraining the model first.
+
+- **Train from scratch**  
+  Run the training and evaluation scripts to regenerate the model artifacts yourself and reproduce the main modeling workflow end to end.
+
+- **Optimize experimentally**  
+  Use the optimization script to explore hyperparameter and split-search experiments beyond the default pretrained setup.
+
 ## Prerequisites
 
 - **Python 3.11+**
@@ -55,9 +93,9 @@ lstm-autoencoder-spark-kafka/
   ```
 - **Docker** and **Docker Compose** (for the streaming demo)
 
-## Quick Start
+## Learn the Methods
 
-### 1. Install dependencies
+To work through the notebooks, first install the Python dependencies:
 
 ```bash
 git clone <repo-url>
@@ -65,7 +103,7 @@ cd lstm-autoencoder-spark-kafka
 uv sync
 ```
 
-### 2. Open the notebooks
+Then open the notebooks:
 
 ```bash
 uv run jupyter notebook code/
@@ -84,43 +122,50 @@ Both notebooks run cell-by-cell with no external setup beyond `uv sync`. All cel
 >
 > `0_verify_setup.py` is optional troubleshooting. You do not need to run it before the notebooks.
 
-### 3. Run the real-time streaming demo
+## Run the Pretrained Demo
+
+The streaming demo uses the pre-trained artifacts already included in `models/`. You do not need to run training before starting the demo.
 
 ```bash
 MESSAGE_DELAY_SECONDS=0.005 START_OFFSET=4944 LOOP_DATA=false docker compose up --build -d
 ```
 
-Open http://localhost:8050 to view the live dashboard.
+Open `http://localhost:8050` to view the live dashboard.
 
 On subsequent runs (after images are built):
 ```bash
 MESSAGE_DELAY_SECONDS=0.005 START_OFFSET=4944 LOOP_DATA=false docker compose up -d
 ```
 
-### View Logs
+View logs:
 
 ```bash
 docker compose logs -f app
 docker compose logs -f producer
 ```
 
----
+## Train From Scratch
 
-## Workflow
+If you want to reproduce the model artifacts yourself instead of using the included ones:
 
-The numbered files in `code/` tell the full story of the project:
+Run the scripts in order:
 
-| Step | File | Purpose |
-|------|------|---------|
-| 0 | `0_verify_setup.py` | Optional troubleshooting: verify environment, data, and model artifacts |
-| 1 | `1_data_exploration.ipynb` | Explore data patterns, motivate the approach |
-| 2 | `2_model_design.ipynb` | Walk through model architecture and scoring |
-| 3 | `3_train_model.py` | Full training pipeline (optional — pre-trained model included) |
-| 4 | `4_evaluate_model.py` | Evaluate model performance, generate plots |
-| 5 | `5_streaming_app.py` | Real-time streaming application (Docker entrypoint) |
-| 6 | `6_optimize.py` | Hyperparameter and split optimization (advanced) |
+```bash
+uv run python code/3_train_model.py
+uv run python code/4_evaluate_model.py
+```
 
-**Start with the notebooks** (steps 1-2) to understand the project. The Python scripts (steps 3-6) are for training, evaluation, and deployment. `0_verify_setup.py` is optional.
+This regenerates the model and evaluation outputs used by the workflow and updates the artifacts in `models/`.
+
+## Optimize
+
+If you want to explore alternative hyperparameters or split configurations:
+
+```bash
+uv run python code/6_optimize.py
+```
+
+This is optional and intended for experimentation beyond the default pretrained setup, including alternative hyperparameter and data split experiments.
 
 ## Architecture
 
@@ -136,32 +181,3 @@ The numbered files in `code/` tell the full story of the project:
 - **Spark**: Structured Streaming consumes micro-batches from Kafka
 - **LSTM Detector**: Pre-trained Encoder-Decoder flags anomalous weekly windows
 - **Dash**: Real-time visualization with anomaly markers and 6-hour localization
-
-## Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `START_OFFSET` | `0` | Record index to start streaming from (4944 for test data) |
-| `LOOP_DATA` | `true` | Whether to loop through data continuously |
-| `MESSAGE_DELAY_SECONDS` | `0.1` | Delay between messages (0.005 for fast demo) |
-
-## Detection Performance
-
-The LSTM Encoder-Decoder detects all 5 known anomalies in the NYC taxi dataset:
-
-- **NYC Marathon** (Nov 1-3, 2014) — demand spike
-- **Thanksgiving** (Nov 25-29, 2014) — demand drop
-- **Christmas** (Dec 23-27, 2014) — demand drop
-- **New Year's** (Dec 29 - Jan 3, 2015) — pattern disruption
-- **January Blizzard** (Jan 24-29, 2015) — demand drop
-
-**Precision: 100% | Recall: 100% | Inference: <5ms per weekly window**
-
-## Services & Ports
-
-| Service | Port | URL |
-|---------|------|-----|
-| Dash Dashboard | 8050 | http://localhost:8050 |
-| Spark Master UI | 8080 | http://localhost:8080 |
-| Kafka | 9092 | External access |
-| Zookeeper | 2181 | Kafka coordination |
