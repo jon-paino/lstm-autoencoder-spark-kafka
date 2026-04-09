@@ -40,13 +40,13 @@ lstm-autoencoder-spark-kafka/
 │   ├── training_history.pkl                 # Training loss curves
 │   └── preprocessor_config.pkl              # Data split configuration
 │
-├── striim/                                  # Striim Platform OP integration (see STRIIM_LSTMAE.md)
+├── striim/                                  # Striim Platform OP integration (see STRIIM.md)
 │
 ├── Dockerfile.app                           # App container definition
 ├── Dockerfile.producer                      # Producer container definition
 ├── docker-compose.yml                       # Full stack orchestration
 ├── pyproject.toml                           # Python dependencies
-├── STRIIM_LSTMAE.md                         # Striim pipeline setup guide
+├── STRIIM.md                         # Striim pipeline setup guide
 └── TECHNICAL.md                             # Detailed technical reference
 ```
 
