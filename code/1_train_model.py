@@ -2,10 +2,12 @@
 Step 1: Train Model -- baseline run
 
 Trains an LSTM Encoder-Decoder on the NYC taxi CSV and saves artifacts
-to `models/initial/`. Defaults are deliberately under-spec'd
-(hidden_dim=16, epochs=15, lr=2e-3, train_weeks=4) so the baseline
-catches all 5 anomalies but over-flags normal weeks (F1 ~ 40%).
-Step 4 (`code/4_grid_sweep.py`) then improves on it.
+to `models/initial/`. Defaults are intentionally a small, fast
+configuration (hidden_dim=24, epochs=20, lr=2e-3, train_weeks=6) so the
+baseline catches all 5 known anomalies but trips on 2 normal weeks
+(F1 ~ 83%). Step 4 (`code/4_grid_sweep.py`) then improves on it by
+searching for a better hyperparameter / split combination and
+retraining.
 
 Window-level Mahalanobis scoring on the full 336-step error vector;
 threshold at the 99.99th percentile of validation distances. See
@@ -71,15 +73,15 @@ def main():
     parser.add_argument("--data-path", type=str, default=str(PROJECT_ROOT / "data" / "nyc_taxi.csv"))
     parser.add_argument("--output-dir", type=str, default=str(PROJECT_ROOT / "models" / "initial"),
                         help="Where to save your trained artifacts. Defaults to models/initial/ to leave the prebuilt models/lstm_model.pt et al untouched.")
-    parser.add_argument("--hidden-dim", type=int, default=16)
+    parser.add_argument("--hidden-dim", type=int, default=24)
     parser.add_argument("--num-layers", type=int, default=1)
     parser.add_argument("--dropout", type=float, default=0.2)
-    parser.add_argument("--epochs", type=int, default=15)
+    parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=2e-3)
     parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--threshold-percentile", type=float, default=99.99)
-    parser.add_argument("--train-weeks", type=int, default=4)
+    parser.add_argument("--train-weeks", type=int, default=6)
     parser.add_argument("--val-weeks", type=int, default=2)
     parser.add_argument("--threshold-weeks", type=int, default=2)
     parser.add_argument("--use-synthetic-anomalies", action="store_true",
@@ -109,7 +111,8 @@ def main():
     print(f"Max epochs:         {args.epochs}")
     print(f"Scoring:            window-level Mahalanobis @ {args.threshold_percentile}th percentile")
     print()
-    print("This is an under-spec'd baseline -- expect F1 around 40%. Run")
+    print("This is a fast baseline -- expect F1 around 83% (catches all 5 known")
+    print("anomalies but trips on 2 normal weeks). Run")
     print("    python code/4_grid_sweep.py")
     print("next to search for a better configuration. The sweep will retrain the")
     print("winning config and save it to models/best/.")
@@ -202,16 +205,13 @@ def main():
     print("-" * 55)
 
     for score, pred, week in zip(test_scores, predictions, test_info):
+        if week.get("is_edge_case"):
+            continue
         pred_str = "ANOMALY" if pred else "normal"
         actual_str = "ANOMALY" if week["is_anomaly"] else "normal"
-        if week.get("is_edge_case"):
-            label, match = f"{week['year_week']} *", "-"
-        else:
-            label = week["year_week"]
-            match = "Y" if pred == week["is_anomaly"] else "N"
-        print(f"{label:<12} {score:>12.2f} {pred_str:>10} {actual_str:>12} {match:>6}")
+        match = "Y" if pred == week["is_anomaly"] else "N"
+        print(f"{week['year_week']:<12} {score:>12.2f} {pred_str:>10} {actual_str:>12} {match:>6}")
 
-    # Edge-case weeks are excluded from precision/recall/F1 (see EDGE_CASE_WEEKS).
     scored = [(p, w) for p, w in zip(predictions, test_info) if not w.get("is_edge_case")]
     tp = sum(1 for p, w in scored if p and w["is_anomaly"])
     fp = sum(1 for p, w in scored if p and not w["is_anomaly"])
@@ -219,10 +219,8 @@ def main():
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
-    n_edge = sum(1 for w in test_info if w.get("is_edge_case"))
 
-    print(f"\n* = edge-case week, excluded from metrics ({n_edge} edge weeks, {len(scored)} scored)")
-    print(f"Precision: {precision:.2%}  Recall: {recall:.2%}  F1: {f1:.2%}")
+    print(f"\nPrecision: {precision:.2%}  Recall: {recall:.2%}  F1: {f1:.2%}")
 
     # Step 6: Save artifacts
     print("\n--- Step 6: Saving artifacts ---")

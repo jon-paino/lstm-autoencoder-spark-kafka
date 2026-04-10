@@ -133,13 +133,13 @@ def compute_f_beta(precision: float, recall: float, beta: float = 0.1) -> float:
 def compute_metrics(
     predictions: np.ndarray,
     actuals: np.ndarray,
-    edge_mask: Optional[np.ndarray] = None,
+    skip_mask: Optional[np.ndarray] = None,
     beta: float = 0.1,
 ) -> Dict[str, float]:
-    """Edge-case weeks (mask=True) are excluded from precision/recall/F1."""
-    if edge_mask is None:
-        edge_mask = np.zeros_like(predictions, dtype=bool)
-    scored = ~edge_mask
+    """Weeks where skip_mask=True are excluded from precision/recall/F1."""
+    if skip_mask is None:
+        skip_mask = np.zeros_like(predictions, dtype=bool)
+    scored = ~skip_mask
     p = predictions[scored]
     a = actuals[scored]
 
@@ -222,8 +222,8 @@ def train_full(
 
     test_info = get_test_week_info(week_info, split_indices)
     actuals = np.array([w["is_anomaly"] for w in test_info])
-    edge_mask = np.array([w.get("is_edge_case", False) for w in test_info])
-    metrics = compute_metrics(predictions, actuals, edge_mask, beta)
+    skip_mask = np.array([w.get("is_edge_case", False) for w in test_info])
+    metrics = compute_metrics(predictions, actuals, skip_mask, beta)
 
     config_dict = {
         "train_weeks": train_weeks,
@@ -249,7 +249,7 @@ def train_full(
         "test_info": test_info,
         "predictions": predictions,
         "test_scores": test_scores,
-        "edge_mask": edge_mask,
+        "skip_mask": skip_mask,
     }
 
 

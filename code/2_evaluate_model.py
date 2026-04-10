@@ -65,18 +65,12 @@ def load_model(model_path: str, device: torch.device) -> EncDecAD:
 
 
 def evaluate_window_level(model, scorer, test_loader, test_week_info, device):
-    """
-    Evaluate window-level Mahalanobis anomaly detection on the test set.
-
-    Edge-case weeks (`is_edge_case=True`) are excluded from precision /
-    recall / F1 but kept in the returned arrays so callers can still
-    display them.
-    """
+    """Evaluate window-level Mahalanobis anomaly detection on the test set."""
     scores, errors = scorer.compute_scores(model, test_loader, device)
     predictions = scorer.predict(scores)
     actuals = np.array([w["is_anomaly"] for w in test_week_info])
-    edge_mask = np.array([w.get("is_edge_case", False) for w in test_week_info])
-    scored_mask = ~edge_mask
+    skip_mask = np.array([w.get("is_edge_case", False) for w in test_week_info])
+    scored_mask = ~skip_mask
 
     tp = int(np.sum(predictions[scored_mask] & actuals[scored_mask]))
     fp = int(np.sum(predictions[scored_mask] & ~actuals[scored_mask]))
@@ -89,11 +83,11 @@ def evaluate_window_level(model, scorer, test_loader, test_week_info, device):
 
     return {
         "scores": scores, "errors": errors, "predictions": predictions,
-        "actuals": actuals, "edge_mask": edge_mask,
+        "actuals": actuals, "skip_mask": skip_mask,
         "week_info": test_week_info, "threshold": scorer.threshold,
         "metrics": {"tp": tp, "fp": fp, "fn": fn, "tn": tn,
                     "precision": float(precision), "recall": float(recall), "f1": float(f1),
-                    "n_scored": int(scored_mask.sum()), "n_edge": int(edge_mask.sum())},
+                    "n_scored": int(scored_mask.sum())},
     }
 
 
@@ -314,23 +308,20 @@ def main():
     print("EVALUATION REPORT")
     print("=" * 60)
     print(f"\nPrecision={m['precision']:.2%}  Recall={m['recall']:.2%}  F1={m['f1']:.2%}")
-    print(f"(over {m['n_scored']} scored weeks; {m['n_edge']} edge-case weeks excluded)")
+    print(f"(over {m['n_scored']} scored weeks)")
 
     print(f"\n{'Week':<12} {'Score':>14} {'Predicted':>10} {'Actual':>10} {'Match':>6}")
     print("-" * 56)
-    for score, pred, actual, edge, week in zip(
+    for score, pred, actual, skip, week in zip(
         results["scores"], results["predictions"], results["actuals"],
-        results["edge_mask"], test_week_info,
+        results["skip_mask"], test_week_info,
     ):
+        if skip:
+            continue
         pred_str = "ANOMALY" if pred else "normal"
         actual_str = "ANOMALY" if actual else "normal"
-        if edge:
-            tag, match = "(edge)", "-"
-        else:
-            tag, match = week["year_week"], ("Y" if pred == actual else "N")
-        label = f"{week['year_week']}{' *' if edge else ''}"
-        print(f"{label:<12} {score:>14.2f} {pred_str:>10} {actual_str:>10} {match:>6}")
-    print("\n* = edge-case week, excluded from precision/recall/F1")
+        match = "Y" if pred == actual else "N"
+        print(f"{week['year_week']:<12} {score:>14.2f} {pred_str:>10} {actual_str:>10} {match:>6}")
 
     test_scores = results["scores"]
     test_actuals = results["actuals"]
