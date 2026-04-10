@@ -84,38 +84,25 @@ cd lstm-autoencoder-spark-kafka
 uv sync
 ```
 
-### 2. Read through the notebooks (optional, for context)
-
-The notebooks are interactive walkthroughs of the methodology and motivation. They are **supporting material** -- read them when you want the *why* behind the architecture and the scoring methodology, not when you want to run things. They load the reference artifacts in `models/` so you can see everything end-to-end without waiting on training.
-
-| Notebook | What you'll learn |
-|----------|-------------------|
-| **`data_exploration.ipynb`** | Dataset overview, periodicity analysis, why simple thresholds fail, motivation for reconstruction-based detection |
-| **`model_design.ipynb`** | LSTM Encoder-Decoder architecture, training demo, window-Mahalanobis scoring, anomaly localization |
-
-```bash
-uv run jupyter notebook notebooks/
-```
-
 > `0_verify_setup.py` is optional troubleshooting. You do not need to run it before the scripts.
 
-### 3. Train a baseline, then improve it via grid sweep
+### 2. Train a baseline, then improve it via grid sweep
 
 This is a four-command journey that tells the full reproduction story. None of these commands ever overwrite the prebuilt artifacts at `models/lstm_model.pt`, `models/scaler.pkl`, or `models/scorer.pkl` -- the user-trained models go to `models/initial/` and `models/best/`, both of which are gitignored.
 
 > **Note:** `code/3_streaming_app.py` is intentionally skipped here. It is the Docker entrypoint for the visual streaming demo and is **not** meant to be run directly with `python`. See the [Docker demo with visual application](#docker-demo-with-visual-application) section below.
 
-#### 3a. Train the baseline
+#### 2a. Train the baseline
 
 ```bash
 uv run python code/1_train_model.py
 ```
 
-This trains a deliberately under-spec'd model (`hidden_dim=16`, `lr=2e-3`, `15` epochs, only `4` training weeks) and writes the artifacts to `models/initial/`. The baseline catches all 5 labeled anomalies (recall = 100%) but over-flags normal weeks badly:
+This trains a initial model (`hidden_dim=16`, `lr=2e-3`, `15` epochs, only `4` training weeks) and writes the artifacts to `models/initial/`. The baseline catches all 5 labeled anomalies (recall = 100%) but over-flags normal weeks badly:
 
 > **Baseline metrics:** Precision = 25%, Recall = 100%, F1 = 40% over 20 scored test weeks. The model hasn't seen enough training data and is too small to learn the weekly shape cleanly, so it flags almost every week as anomalous.
 
-#### 3b. Evaluate the baseline
+#### 2b. Evaluate the baseline
 
 ```bash
 uv run python code/2_evaluate_model.py
@@ -123,7 +110,7 @@ uv run python code/2_evaluate_model.py
 
 By default this reads `models/initial/` and reprints the baseline metrics, generates diagnostic plots in `evaluation/`, and shows the per-week scores. You can see exactly which weeks were over-flagged.
 
-#### 3c. Run the grid sweep to find a better configuration
+#### 2c. Run the grid sweep to find a better configuration
 
 ```bash
 uv run python code/4_grid_sweep.py
@@ -135,7 +122,7 @@ The winning configuration on this dataset is `hidden_dim=64, num_layers=1, dropo
 
 > **Best-config metrics:** Precision = 100%, Recall = 100%, F1 = 100% over 14 scored test weeks (5 / 5 known anomalies detected, zero false positives).
 
-#### 3d. Evaluate the best-config model
+#### 2d. Evaluate the best-config model
 
 ```bash
 uv run python code/2_evaluate_model.py --model-dir models/best
@@ -144,6 +131,18 @@ uv run python code/2_evaluate_model.py --model-dir models/best
 Same evaluation script, pointed at the retrained best artifacts. You should see the per-week table line up with the prebuilt reference and the metrics jump from 40% F1 to 100% F1.
 
 ---
+### 3. Read through the notebooks (optional, for context)
+
+The notebooks are interactive walkthroughs of the methodology and motivation. They are **supporting material** -- read them when you want the *why* behind the architecture and the scoring methodology, not when you want to run things. They load the reference artifacts in `models/` so you can see everything end-to-end without waiting on training.
+
+| Notebook | What you'll learn |
+|----------|-------------------|
+| **`data_exploration.ipynb`** | Dataset overview, periodicity analysis, why simple thresholds fail, motivation for reconstruction-based detection |
+| **`model_design.ipynb`** | LSTM Encoder-Decoder architecture, training demo, window-Mahalanobis scoring, anomaly localization |
+
+```bash
+uv run jupyter notebook notebooks/
+```
 
 ## Docker demo with visual application
 
