@@ -167,6 +167,19 @@ docker compose logs -f app
 docker compose logs -f producer
 ```
 
+## Running this pipeline inside Striim
+
+The Kafka + Spark + Dash demo above is one way to operationalize this detector. If you are a Striim customer, the same architecture runs natively inside a Striim pipeline, with the LSTM-AE scorer exposed as a FastAPI service and called from a custom Open Processor that handles windowing, feature assembly, and result emission.
+
+A complete walkthrough of the port lives in [striim-plan.md](striim-plan.md). It covers:
+
+- The WAEvent pass-through pattern that replaces typed streams and hand-built `_1_0` classes, cutting deployment from 16 steps to 7
+- The full TQL for the `FileReader` source, format CQ, and `FileWriter` target, plus Flow Designer wiring for the Open Processor
+- The Java OP (`NYCADScorer`) that buffers 336-point weekly windows internally, calls `POST /v1/score`, and writes results back into the inner WAEvent's `data` array
+- Verified parity with the standalone pipeline: 22 scored windows, 5/5 labeled anomalies detected (NYC Marathon, Thanksgiving, Christmas, New Year's, January Blizzard), zero false positives
+
+Swap `FileReader` for `KafkaReader`, `OracleReader`, or any other Striim source and the downstream windowing, scoring, and alerting components stay unchanged. That is the point, the detector is source-agnostic, and Striim gives you the CDC, exactly-once semantics, and observability you need around it.
+
 ---
 
 ## Workflow
